@@ -232,6 +232,7 @@ def prepare_installation():
         "-DCMAKE_BUILD_TYPE={}".format(cfg),
         get_env_cmake_option("IREE_TARGET_BACKEND_CUDA"),
         get_env_cmake_option("IREE_ENABLE_CPUINFO", "ON"),
+        get_env_cmake_option("IREE_HAL_VULKAN_FEATURE_ENABLE_DEBUG_UTILS"),
     ]
 
     # These usually flow through the environment, but we add them explicitly
