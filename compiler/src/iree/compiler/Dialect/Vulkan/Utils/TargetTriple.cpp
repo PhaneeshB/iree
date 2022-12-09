@@ -35,6 +35,7 @@ spirv::Vendor getVendor(const TargetTriple &triple) {
     case TargetTripleArch::AMD_RDNAv2:
     case TargetTripleArch::AMD_RDNAv3:
     case TargetTripleArch::AMD_RGCNv3:
+    case TargetTripleArch::AMD_RGCNv5:
       return spirv::Vendor::AMD;
     case TargetTripleArch::ARM_Valhall:
       return spirv::Vendor::ARM;
@@ -69,6 +70,7 @@ spirv::DeviceType getDeviceType(const TargetTriple &triple) {
     case TargetTripleArch::AMD_RDNAv2:
     case TargetTripleArch::AMD_RDNAv3:
     case TargetTripleArch::AMD_RGCNv3:
+    case TargetTripleArch::AMD_RGCNv5:
     case TargetTripleArch::NV_Turing:
     case TargetTripleArch::NV_Ampere:
       return spirv::DeviceType::DiscreteGPU;
@@ -262,6 +264,11 @@ CapabilitiesAttr getCapabilities(const TargetTriple &triple,
 
       variablePointers = variablePointersStorageBuffer = true;
       break;
+    case TargetTripleArch::AMD_RGCNv5: {
+      shaderFloat16 = shaderFloat64 = true;
+      storageBuffer16BitAccess = storagePushConstant16 = true;
+    }
+      LLVM_FALLTHROUGH;
     case TargetTripleArch::AMD_RGCNv3:
       maxComputeSharedMemorySize = 65536;
       maxComputeWorkGroupInvocations = 1024;
@@ -274,10 +281,8 @@ CapabilitiesAttr getCapabilities(const TargetTriple &triple,
                          SubgroupFeature::ShuffleRelative |
                          SubgroupFeature::Clustered | SubgroupFeature::Quad;
 
-      shaderFloat16 = shaderFloat64 = false;
       shaderInt8 = shaderInt16 = shaderInt64 = true;
 
-      storageBuffer16BitAccess = storagePushConstant16 = false;
       uniformAndStorageBuffer16BitAccess = true;
       storageBuffer8BitAccess = true, storagePushConstant8 = false;
       uniformAndStorageBuffer8BitAccess = true;
