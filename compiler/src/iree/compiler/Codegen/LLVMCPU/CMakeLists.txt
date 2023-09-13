@@ -73,6 +73,7 @@ iree_cc_library(
     "LLVMCPUUnfuseFMAOps.cpp"
     "LLVMCPUVectorLowering.cpp"
     "Passes.cpp"
+    "SetSpecialTilingConfigs.cpp"
     "TargetMLTransformInfo.cpp"
     "Utils.cpp"
     "VectorContractCustomKernels.cpp"
