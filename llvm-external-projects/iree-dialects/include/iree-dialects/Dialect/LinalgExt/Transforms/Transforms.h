@@ -40,45 +40,6 @@ struct ForallOpToAsyncRewriter : public OpRewritePattern<scf::ForallOp> {
   }
 };
 
-/// Pattern to rewrite a ForallOp to an scf::ForOp.
-struct ForallOpToScfForRewriter : public OpRewritePattern<scf::ForallOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  FailureOr<scf::ForOp>
-  returningMatchAndRewrite(scf::ForallOp forallOp,
-                           PatternRewriter &rewriter) const;
-
-  LogicalResult matchAndRewrite(scf::ForallOp forallOp,
-                                PatternRewriter &rewriter) const override {
-    return returningMatchAndRewrite(forallOp, rewriter);
-  }
-};
-
-struct FusionResult {
-  TilingInterface consumerOp;
-  SmallVector<TilingInterface> fusedOps;
-};
-
-/// Pattern to fuse the producers of a tileable op.
-struct LinalgExtFusionPattern
-    : public OpInterfaceRewritePattern<TilingInterface> {
-  LinalgExtFusionPattern(MLIRContext *context, ArrayRef<int64_t> operandsToFuse)
-      : OpInterfaceRewritePattern<TilingInterface>(context),
-        operandsToFuse(operandsToFuse.begin(), operandsToFuse.end()) {}
-
-  FailureOr<FusionResult>
-  returningMatchAndRewrite(TilingInterface consumerOp,
-                           PatternRewriter &rewriter) const;
-
-  LogicalResult matchAndRewrite(TilingInterface consumerOp,
-                                PatternRewriter &rewriter) const override {
-    return returningMatchAndRewrite(consumerOp, rewriter);
-  }
-
-private:
-  SmallVector<int64_t> operandsToFuse;
-};
-
 //===----------------------------------------------------------------------===//
 // Transformations exposed as patterns, moved from upstream MLIR as IREE still
 // heavily relies on patterns that compose through filters.
@@ -90,7 +51,7 @@ splitReduction(PatternRewriter &b, linalg::LinalgOp op,
                const linalg::ControlSplitReductionFn &controlSplitReductionFn,
                const LinalgTransformationFilter &filter,
                bool useAlloc = false) {
-  if (failed(filter.checkAndNotify(b, op)) || !op.hasTensorSemantics() ||
+  if (failed(filter.checkAndNotify(b, op)) || !op.hasPureTensorSemantics() ||
       op.getNumReductionLoops() != 1 || op.getNumDpsInits() != 1 ||
       !op.hasOnlyProjectedPermutations())
     return b.notifyMatchFailure(op, "precondition not met");
@@ -105,122 +66,6 @@ splitReduction(PatternRewriter &b, linalg::LinalgOp op,
 
   return res->splitLinalgOp;
 }
-
-///
-/// Linalg tiling pattern.
-///
-/// Apply the `tiling` transformation as a pattern.
-/// `filter` controls LinalgTransformMarker matching and update when specified.
-/// See `tiling` for more details.
-// TODO: TiledOpInterface
-struct LinalgTilingPattern
-    : public OpInterfaceRewritePattern<linalg::LinalgOp> {
-  /// Construct a generic pattern applied to all LinalgOp that verify `filter`.
-  LinalgTilingPattern(
-      MLIRContext *context, linalg::LinalgTilingOptions options,
-      LinalgTransformationFilter f = LinalgTransformationFilter(),
-      PatternBenefit benefit = 1);
-
-  /// Construct a pattern specifically applied to `opName`.
-  LinalgTilingPattern(
-      StringRef opName, MLIRContext *context,
-      linalg::LinalgTilingOptions options,
-      LinalgTransformationFilter f = LinalgTransformationFilter(),
-      PatternBenefit benefit = 1);
-
-  /// `matchAndRewrite` implementation that returns the significant transformed
-  /// pieces of IR.
-  FailureOr<linalg::TiledLinalgOp>
-  returningMatchAndRewrite(linalg::LinalgOp op,
-                           PatternRewriter &rewriter) const;
-
-  LogicalResult matchAndRewrite(linalg::LinalgOp op,
-                                PatternRewriter &rewriter) const override {
-    return returningMatchAndRewrite(op, rewriter);
-  }
-
-private:
-  /// LinalgTransformMarker handles special attribute manipulations.
-  LinalgTransformationFilter filter;
-  /// Options to control tiling;
-  linalg::LinalgTilingOptions options;
-};
-
-template <typename... OpTypes>
-class TilingPatterns;
-
-template <>
-class TilingPatterns<> {
-public:
-  static void insert(RewritePatternSet &patterns,
-                     const linalg::LinalgTilingOptions &options,
-                     const LinalgTransformationFilter &f) {}
-};
-
-template <typename OpTy, typename... OpTypes>
-class TilingPatterns<OpTy, OpTypes...> {
-public:
-  static void insert(RewritePatternSet &patterns,
-                     const linalg::LinalgTilingOptions &options,
-                     const LinalgTransformationFilter &f) {
-    patterns.add<LinalgTilingPattern>(OpTy::getOperationName(),
-                                      patterns.getContext(), options, f);
-    TilingPatterns<OpTypes...>::insert(patterns, options, f);
-  }
-};
-
-///
-/// Linalg vectorization patterns.
-///
-/// `filter` controls LinalgTransformMarker matching and update when specified.
-/// See `vectorizeLinalgOp` for more details.
-struct LinalgVectorizationPattern
-    : public OpInterfaceRewritePattern<linalg::LinalgOp> {
-  /// Construct a generic pattern applied to all LinalgOp that verify `filter`.
-  LinalgVectorizationPattern(
-      MLIRContext *context,
-      LinalgVectorizationOptions opts = LinalgVectorizationOptions(),
-      LinalgTransformationFilter f = LinalgTransformationFilter(),
-      PatternBenefit benefit = 1);
-
-  /// Construct a pattern specifically applied to `opName`.
-  LinalgVectorizationPattern(
-      StringRef opName, MLIRContext *context,
-      LinalgVectorizationOptions opts = LinalgVectorizationOptions(),
-      LinalgTransformationFilter f = LinalgTransformationFilter(),
-      PatternBenefit benefit = 1);
-
-  LogicalResult matchAndRewrite(linalg::LinalgOp linalgOp,
-                                PatternRewriter &rewriter) const override;
-
-private:
-  /// LinalgTransformMarker handles special attribute manipulations.
-  LinalgVectorizationOptions options;
-  LinalgTransformationFilter filter;
-};
-
-template <typename... OpTypes>
-class VectorizationPatterns;
-
-template <>
-class VectorizationPatterns<> {
-public:
-  static void insert(RewritePatternSet &patterns,
-                     const LinalgVectorizationOptions &opts,
-                     const LinalgTransformationFilter &f) {}
-};
-
-template <typename OpTy, typename... OpTypes>
-class VectorizationPatterns<OpTy, OpTypes...> {
-public:
-  static void insert(RewritePatternSet &patterns,
-                     const LinalgVectorizationOptions &opts,
-                     const LinalgTransformationFilter &f) {
-    patterns.add<LinalgVectorizationPattern>(OpTy::getOperationName(),
-                                             patterns.getContext(), opts, f);
-    VectorizationPatterns<OpTypes...>::insert(patterns, opts, f);
-  }
-};
 
 ///
 /// Linalg promotion patterns.
@@ -261,14 +106,14 @@ struct LinalgBasePromotionPattern : public RewritePattern {
     // So to fail properly, we should be cloning
     // the op and deleting the previous op. This
     // needs more investigation.
-    rewriter.startRootUpdate(op);
+    rewriter.startOpModification(op);
     std::optional<linalg::LinalgOp> promotedOp =
         promoteSubViews(rewriter, cast<linalg::LinalgOp>(op), options);
     if (!promotedOp) {
-      rewriter.cancelRootUpdate(op);
+      rewriter.cancelOpModification(op);
       return op->emitError("subview promotion failed");
     }
-    rewriter.finalizeRootUpdate(op);
+    rewriter.finalizeOpModification(op);
     filter.replaceLinalgTransformationFilter(rewriter, op);
     return success();
   }

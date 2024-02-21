@@ -21,8 +21,8 @@
 #define DEBUG_TYPE "iree-codegen-generic-vectorization"
 #define VEC_DBGS() (llvm::dbgs() << '[' << DEBUG_TYPE << "] ")
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
+
 namespace {
 
 /// Tries to infer the vector sizes from an IR using ValueBounds analysis.
@@ -224,12 +224,12 @@ void GenericVectorizationPass::runOnOperation() {
                               linalg::LinalgCopyVTWForwardingPattern>(
         funcOp.getContext(), /*benefit=*/2);
   }
+
   if (enableCleanup) {
     vector::TransferReadOp::getCanonicalizationPatterns(vectorizationPatterns,
                                                         funcOp.getContext());
     vector::TransferWriteOp::getCanonicalizationPatterns(vectorizationPatterns,
                                                          funcOp.getContext());
-    populateVectorTransferTensorSliceTransforms(vectorizationPatterns);
   }
   (void)applyPatternsAndFoldGreedily(funcOp, std::move(vectorizationPatterns));
 
@@ -243,14 +243,16 @@ void GenericVectorizationPass::runOnOperation() {
     (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
   }
 }
+
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> createGenericVectorizationPass() {
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createGenericVectorizationPass() {
   return std::make_unique<GenericVectorizationPass>();
 }
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createGenericVectorizationPass(const GenericVectorizationPassOptions &options) {
   return std::make_unique<GenericVectorizationPass>(options);
 }
-} // namespace iree_compiler
-} // namespace mlir
+
+} // namespace mlir::iree_compiler

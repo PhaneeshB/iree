@@ -201,7 +201,7 @@ hal.executable.variant public @cuda_nvptx_fb target(<"cuda", "cuda-nvptx-fb", {t
         %6 = arith.addf %in, %out : f32
         linalg.yield %6 : f32
       } -> tensor<33xf32>
-      flow.dispatch.tensor.store %5, %1, offsets = [0], sizes = [8], strides = [1] : tensor<33xf32> -> !flow.dispatch.tensor<writeonly:tensor<33xf32>>
+      flow.dispatch.tensor.store %5, %1, offsets = [0], sizes = [33], strides = [1] : tensor<33xf32> -> !flow.dispatch.tensor<writeonly:tensor<33xf32>>
       return
     }
   }
@@ -379,15 +379,14 @@ hal.executable.variant public @cuda_nvptx_fb target(<"cuda", "cuda-nvptx-fb", {t
 //         CHECK: gpu.barrier
 
 //     CHECK-NOT: vector.transfer_read
-// CHECK-COUNT-5: gpu.shuffle  xor{{.*}}{{[[:space:]].*}}vector.broadcast{{.*}}{{[[:space:]].*}}vector.bitcast{{.*}}{{[[:space:]].*}}arith.addi{{.*}}vector<4xi8>
-//         CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<32xvector<4xi8>, #gpu.address_space<workgroup>>
+// CHECK-COUNT-5: gpu.shuffle  xor{{.*}}{{[[:space:]].*}}arith.trunci{{.*}}{{[[:space:]].*}}arith.addi{{.*}}i8
+//         CHECK: %[[ALLOC:.*]] = memref.alloc() : memref<32xi8, #gpu.address_space<workgroup>>
 //         CHECK: scf.if
-//         CHECK:   memref.store %{{.*}}, %[[ALLOC]][%{{.*}}] : memref<32xvector<4xi8>, #gpu.address_space<workgroup>>
+//         CHECK:   memref.store %{{.*}}, %[[ALLOC]][%{{.*}}] : memref<32xi8, #gpu.address_space<workgroup>>
 //         CHECK: }
-// CHECK-COUNT-5: gpu.shuffle  xor{{.*}}{{[[:space:]].*}}vector.broadcast{{.*}}{{[[:space:]].*}}vector.bitcast{{.*}}{{[[:space:]].*}}arith.addi{{.*}}vector<4xi8>
+// CHECK-COUNT-5: gpu.shuffle  xor{{.*}}{{[[:space:]].*}}arith.trunci{{.*}}{{[[:space:]].*}}arith.addi{{.*}}i8
 
-//         CHECK: %[[RES:.*]] = vector.reduction <add>, %59 : vector<4xi8> into i8
-//         CHECK: %[[RES_VEC:.*]] = vector.broadcast %[[RES]] : i8 to vector<1xi8>
+//         CHECK: %[[RES_VEC:.*]] = vector.broadcast %{{.+}} : i8 to vector<1xi8>
 //         CHECK: %[[CONDXIS0:.*]] = arith.cmpi eq, %[[TIDX]], %[[C0]] : index
 //         CHECK: scf.if %[[CONDXIS0]]
 //         CHECK:   vector.transfer_write %[[RES_VEC]], %[[ALLOC0]][%[[C0]]] {in_bounds = [true]} : vector<1xi8>, memref<1xi8, #gpu.address_space<workgroup>>
@@ -403,7 +402,6 @@ hal.executable.variant public @cuda_nvptx_fb target(<"cuda", "cuda-nvptx-fb", {t
 #map = affine_map<(d0, d1) -> (d0, d1)>
 #map1 = affine_map<(d0, d1) -> (d0)>
 #pipeline_layout = #hal.pipeline.layout<push_constants = 0, sets = [<0, bindings = [<0, storage_buffer, ReadOnly>, <1, storage_buffer>]>]>
-#device_target_cuda = #hal.device.target<"cuda", {executable_targets = [#executable_target_cuda_nvptx_fb], legacy_sync}>
 
 hal.executable @reduction_2d_trailing_elementwise_static_dispatch_0 {
   hal.executable.variant public @cuda_nvptx_fb target(#executable_target_cuda_nvptx_fb) {
@@ -524,8 +522,7 @@ hal.executable private @i4_dequant_matvec {
 //         CHECK:     %[[ADD:.+]] = arith.addf %[[MUL1]], %[[ARG]] : vector<1x8xf16>
 
 //         CHECK:   %[[SCAST:.+]] = vector.shape_cast %[[FOR]] : vector<1x8xf16> to vector<8xf16>
-//         CHECK:   %[[EXTRACT:.+]] = vector.extract_strided_slice %[[SCAST]] {offsets = [0], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
-//         CHECK:   vector.reduction <add>, %[[EXTRACT]] : vector<4xf16> into f16
+//         CHECK:   vector.reduction <add>, %[[SCAST]] : vector<8xf16> into f16
 // CHECK-COUNT-6:   gpu.shuffle  xor
 //         CHECK:   scf.if
 //         CHECK:     vector.transfer_write

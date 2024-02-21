@@ -21,6 +21,7 @@
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ArmNeon2dToIntr/ArmNeon2dToIntr.h"
+#include "mlir/Conversion/ArmSMEToLLVM/ArmSMEToLLVM.h"
 #include "mlir/Conversion/ComplexToLLVM/ComplexToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
@@ -58,8 +59,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -174,7 +174,7 @@ struct ConvertHALEntryPointFuncOp
     // order to get any debug information (including just line tables) from MLIR
     // into LLVM IR.
     auto scopeAttr = HALDispatchABI::buildScopeAttr(
-        llvmFuncOp->getParentOfType<mlir::ModuleOp>(), llvmFuncOp.getName(),
+        llvmFuncOp->getParentOfType<mlir::ModuleOp>(), llvmFuncOp,
         getTypeConverter());
     llvmFuncOp->setLoc(FusedLoc::get(llvmFuncOp.getContext(),
                                      {llvmFuncOp->getLoc()}, scopeAttr));
@@ -695,8 +695,7 @@ static IREE::HAL::CallingConvention getCallingConvention(Operation *forOp) {
 /// pattern.
 struct RewriteFuncOpABI : public OpRewritePattern<LLVM::LLVMFuncOp> {
   RewriteFuncOpABI(HALDispatchABI &abi, LLVMTypeConverter &typeConverter)
-      : OpRewritePattern(&typeConverter.getContext()), abi(abi),
-        typeConverter(typeConverter) {}
+      : OpRewritePattern(&typeConverter.getContext()), abi(abi) {}
 
   LogicalResult matchAndRewrite(LLVM::LLVMFuncOp funcOp,
                                 PatternRewriter &rewriter) const override {
@@ -742,7 +741,6 @@ struct RewriteFuncOpABI : public OpRewritePattern<LLVM::LLVMFuncOp> {
 
 private:
   HALDispatchABI &abi;
-  LLVMTypeConverter &typeConverter;
 };
 
 /// Lower call ops with specified ABI. The ABI to use is looked up from the
@@ -754,8 +752,7 @@ private:
 /// pattern.
 struct RewriteCallOpABI : public OpRewritePattern<LLVM::CallOp> {
   RewriteCallOpABI(HALDispatchABI &abi, LLVMTypeConverter &typeConverter)
-      : OpRewritePattern(&typeConverter.getContext()), abi(abi),
-        typeConverter(typeConverter) {}
+      : OpRewritePattern(&typeConverter.getContext()), abi(abi) {}
 
   LogicalResult matchAndRewrite(LLVM::CallOp callOp,
                                 PatternRewriter &rewriter) const override {
@@ -790,7 +787,6 @@ struct RewriteCallOpABI : public OpRewritePattern<LLVM::CallOp> {
 
 private:
   HALDispatchABI &abi;
-  LLVMTypeConverter &typeConverter;
 };
 
 /// Rewrites calls to extern functions to dynamic library import calls.
@@ -1033,6 +1029,7 @@ void ConvertToLLVMPass::runOnOperation() {
     patterns.add<ExpandMulSIExtended>(patterns.getContext(), /*benefit=*/1024);
   }
 
+  LLVMConversionTarget target(getContext());
   populateAffineToStdConversionPatterns(patterns);
   populateSCFToControlFlowConversionPatterns(patterns);
   cf::populateControlFlowToLLVMConversionPatterns(typeConverter, patterns);
@@ -1068,12 +1065,10 @@ void ConvertToLLVMPass::runOnOperation() {
   >(abi, typeConverter);
   // clang-format on
 
-  LLVMConversionTarget target(getContext());
   target.addLegalOp<ModuleOp>();
   target.addIllegalDialect<func::FuncDialect, mlir::arith::ArithDialect,
                            IREE::Util::UtilDialect, IREE::HAL::HALDialect,
                            math::MathDialect, tosa::TosaDialect>();
-  target.addIllegalOp<UnrealizedConversionCastOp>();
 
   if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
     signalPassFailure();
@@ -1096,10 +1091,9 @@ void ConvertToLLVMPass::runOnOperation() {
     llvm::Triple triple(targetTripleStr);
     if (triple.isWasm()) {
       populateUnfusedFMAOpsPassPatterns(&getContext(), postPatterns);
-      if (failed(
-              applyPatternsAndFoldGreedily(module, std::move(postPatterns)))) {
-        return signalPassFailure();
-      }
+    }
+    if (failed(applyPatternsAndFoldGreedily(module, std::move(postPatterns)))) {
+      return signalPassFailure();
     }
   }
 }
@@ -1109,5 +1103,4 @@ createConvertToLLVMPass(bool reassociateFpReductions) {
   return std::make_unique<ConvertToLLVMPass>(reassociateFpReductions);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

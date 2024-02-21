@@ -10,15 +10,14 @@
 #include "iree/compiler/Dialect/VM/Conversion/UtilToVM/ConvertUtilToVM.h"
 #include "iree/compiler/Dialect/VM/IR/VMOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
+
 namespace {
 
 static Value castToI32(Value value, OpBuilder &builder) {
@@ -168,5 +167,4 @@ void populateUtilListToVMPatterns(MLIRContext *context,
           typeConverter, context);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

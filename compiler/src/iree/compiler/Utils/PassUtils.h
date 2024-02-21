@@ -12,14 +12,13 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 /// Constructs a pipeline of passes across multiple nested op types.
 ///
 /// Usage:
-///   using FunctionLikeNest = MultiOpNest<func::FuncOp,
-///                                        IREE::Util::InitializerOp>;
+///   using FunctionLikeNest = MultiOpNest<IREE::Util::InitializerOp,
+///                                        IREE::Util::FuncOp>;
 ///
 ///   FunctionLikeNest(passManager)
 ///     .addPass(createMyPass)
@@ -83,7 +82,6 @@ private:
 // has been made which requires another iteration. No-op otherwise.
 void signalFixedPointModified(Operation *rootOp);
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler
 
 #endif // IREE_COMPILER_UTILS_FUNCTIONUTILS_H_

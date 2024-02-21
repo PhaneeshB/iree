@@ -25,8 +25,7 @@ using namespace mlir;
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 static bool isContiguousStore(Operation *write) {
   if (auto transferWrite = dyn_cast<vector::TransferWriteOp>(write)) {
@@ -188,7 +187,7 @@ static bool resultsInSupportedAsyncCopy(MemRefType memrefType,
   return true;
 }
 
-void createAsyncGroups(RewriterBase &rewriter, func::FuncOp funcOp,
+void createAsyncGroups(RewriterBase &rewriter, mlir::FunctionOpInterface funcOp,
                        bool useMMASync) {
   LDBG("Start asyncGroups: useMMASync=" << useMMASync);
   llvm::SmallSetVector<Operation *, 16> copyToSharedMem;
@@ -318,7 +317,8 @@ void createAsyncGroups(RewriterBase &rewriter, func::FuncOp funcOp,
   }
 }
 
-void reorderTranspose(RewriterBase &rewriter, func::FuncOp funcOp) {
+void reorderTranspose(RewriterBase &rewriter,
+                      mlir::FunctionOpInterface funcOp) {
   SmallVector<vector::TransposeOp> transposeOps;
   funcOp.walk([&](Operation *op) {
     if (auto transposeOp = dyn_cast<vector::TransposeOp>(op)) {
@@ -334,8 +334,7 @@ void reorderTranspose(RewriterBase &rewriter, func::FuncOp funcOp) {
     OpBuilder::InsertionGuard g(rewriter);
     Operation *op = transposeOp.getVector().getDefiningOp();
     rewriter.setInsertionPoint(op);
-    SmallVector<int64_t> perm;
-    transposeOp.getTransp(perm);
+    ArrayRef<int64_t> perm = transposeOp.getPermutation();
     SmallVector<Value> transposedOperands;
     for (auto operand : op->getOperands()) {
       Value transposed =
@@ -352,7 +351,7 @@ void reorderTranspose(RewriterBase &rewriter, func::FuncOp funcOp) {
 
 /// Insert barriers and wait operations if there are allocs of a different alias
 /// group before the given alloc.
-static void addBarrier(func::FuncOp funcOp, Operation *alloc,
+static void addBarrier(mlir::FunctionOpInterface funcOp, Operation *alloc,
                        ArrayRef<Operation *> aliasGroup) {
   Block *entryBlock = &(*funcOp.getBlocks().begin());
   bool needBarrier = false;
@@ -387,7 +386,7 @@ static void addBarrier(func::FuncOp funcOp, Operation *alloc,
   builder.create<gpu::BarrierOp>(alloc->getLoc());
 }
 
-void packSharedMemoryAlloc(func::FuncOp funcOp) {
+void packSharedMemoryAlloc(mlir::FunctionOpInterface funcOp) {
   DominanceInfo dominators(funcOp);
   SmallVector<Operation *> allocs;
   funcOp.walk([&](memref::AllocOp alloc) {
@@ -416,5 +415,4 @@ void packSharedMemoryAlloc(func::FuncOp funcOp) {
   packAllocs(builder, funcOp, aliasGroups);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

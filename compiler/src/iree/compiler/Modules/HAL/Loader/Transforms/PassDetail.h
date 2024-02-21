@@ -8,22 +8,14 @@
 #define IREE_COMPILER_MODULES_HAL_LOADER_TRANSFORMS_PASS_DETAIL_H_
 
 #include "iree/compiler/Modules/HAL/Loader/IR/HALLoaderOps.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace HAL {
-namespace Loader {
+namespace mlir::iree_compiler::IREE::HAL::Loader {
 
 #define GEN_PASS_CLASSES
 #include "iree/compiler/Modules/HAL/Loader/Transforms/Passes.h.inc"
 
-} // namespace Loader
-} // namespace HAL
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::HAL::Loader
 
 #endif // IREE_COMPILER_MODULES_HAL_LOADER_TRANSFORMS_PASS_DETAIL_H_

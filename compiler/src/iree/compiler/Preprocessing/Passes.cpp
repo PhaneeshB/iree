@@ -11,9 +11,7 @@
 
 #define DEBUG_TYPE "iree-preprocessing-pass-pipeline"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
+namespace mlir::iree_compiler::Preprocessing {
 
 namespace {
 
@@ -69,10 +67,16 @@ void buildPreprocessingPassPipeline(
   if (pipelineExtensions) {
     pipelineExtensions->extendPreprocessingPassPipeline(passManager);
   }
+
+  if (!preprocessingOptions.preprocessingTransformSpecFilename.empty()) {
+    Preprocessing::InterpreterPassOptions interpreterOptions;
+    interpreterOptions.transformSpecPath =
+        preprocessingOptions.preprocessingTransformSpecFilename;
+    passManager.addPass(
+        Preprocessing::createInterpreterPass(interpreterOptions));
+  }
 }
 
 void registerPreprocessingPasses() { registerCommonPreprocessingPasses(); }
 
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::Preprocessing

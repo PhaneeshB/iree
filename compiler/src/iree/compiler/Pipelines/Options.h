@@ -9,8 +9,7 @@
 
 #include "iree/compiler/Utils/OptionUtils.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 struct BindingOptions {
   // Whether to include runtime support functions for the IREE native ABI.
@@ -68,8 +67,15 @@ struct GlobalOptimizationOptions {
   bool promoteBF16ToF32 = false;
   bool demoteI64ToI32 = false;
 
+  // Enables aggressive propagation of transposes to the inputs of named ops,
+  // rewriting named ops as fused generics.
+  bool aggressiveTransposePropagation = false;
+
+  // Enables transposing all concatenations to the outer most dimension.
+  bool outerDimConcat = false;
+
   // Enables data tiling.
-  bool dataTiling = false;
+  bool dataTiling = true;
 
   // Enables const-expr hoisting into globals.
   bool constExprHoisting = true;
@@ -87,6 +93,19 @@ struct GlobalOptimizationOptions {
   // Maximum byte size increase allowed for constant expr hoisting policy to
   // allow hoisting. The threshold is 1MB by default.
   int64_t constExprMaxSizeIncreaseThreshold = 1024 * 1024;
+
+  // File path to create a parameter archive out of global initial values.
+  std::string parameterArchiveExportPath = "";
+
+  // Optional scope to use for the created parameter archive.
+  std::string parameterExportScope = "";
+
+  // File path to create a splat parameter archive out of all parameters in the
+  // module.
+  std::string splatParameterArchiveExportPath = "";
+
+  // Minimum size of constants to export as parameters.
+  int64_t minimumParameterExportSize = 256;
 
   void bindOptions(OptionsBinder &binder);
   using FromFlags = OptionsFromFlags<GlobalOptimizationOptions>;
@@ -117,7 +136,7 @@ struct SchedulingOptions {
   ExecutionModel executionModel = ExecutionModel::AsyncInternal;
 
   // TODO(benvanik): find a way to share this with
-  // Stream/Transforms/PassDetail.h w/o circular deps.
+  // Stream/Transforms/Passes.h w/o circular deps.
   // Defines the output format of a dump pass.
   enum class DumpOutputFormat {
     // Dumping disabled.
@@ -149,11 +168,11 @@ struct SchedulingOptions {
 
 struct PreprocessingOptions {
   std::string preprocessingPassPipeline;
+  std::string preprocessingTransformSpecFilename;
   void bindOptions(OptionsBinder &binder);
   using FromFlags = OptionsFromFlags<PreprocessingOptions>;
 };
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler
 
 #endif // IREE_COMPILER_PIPELINES_OPTIONS_H_

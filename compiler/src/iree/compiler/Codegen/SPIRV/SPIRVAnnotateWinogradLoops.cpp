@@ -8,8 +8,7 @@
 #include "iree/compiler/Codegen/SPIRV/Utils.h"
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -21,7 +20,7 @@ public:
       default;
 
   void runOnOperation() override {
-    func::FuncOp funcOp = getOperation();
+    auto funcOp = getOperation();
     SmallVector<scf::ForOp> forOps;
     funcOp.walk([&](scf::ForOp forOp) {
       if (!isTiledAndDistributedLoop(forOp))
@@ -40,10 +39,9 @@ public:
 };
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createSPIRVAnnotateWinogradLoopsPass() {
   return std::make_unique<SPIRVAnnotateWinogradLoopsPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

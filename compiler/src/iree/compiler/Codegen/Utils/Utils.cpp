@@ -18,6 +18,7 @@
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/AffineExprVisitor.h"
@@ -27,14 +28,14 @@
 
 #define DEBUG_TYPE "iree-codegen-utils"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 //===----------------------------------------------------------------------===//
 // Utility functions to get entry points
 //===----------------------------------------------------------------------===//
 
-FailureOr<IREE::HAL::ExecutableExportOp> getEntryPoint(func::FuncOp funcOp) {
+FailureOr<IREE::HAL::ExecutableExportOp>
+getEntryPoint(mlir::FunctionOpInterface funcOp) {
   auto variantOp = funcOp->getParentOfType<IREE::HAL::ExecutableVariantOp>();
   if (!variantOp)
     return failure();
@@ -58,7 +59,7 @@ getExecutableVariantOp(Operation *op) {
   return failure();
 }
 
-bool isEntryPoint(func::FuncOp func) {
+bool isEntryPoint(mlir::FunctionOpInterface func) {
   return func.isPublic() && succeeded(getEntryPoint(func));
 }
 
@@ -145,7 +146,11 @@ const char *getIreeArchNameForTargetTriple(llvm::Triple triple) {
 }
 
 bool isVMVXBackend(IREE::HAL::ExecutableTargetAttr targetAttr) {
-  return targetAttr && targetAttr.getBackend().getValue().startswith("vmvx");
+  return targetAttr && targetAttr.getBackend().getValue().starts_with("vmvx");
+}
+
+bool isROCMBackend(IREE::HAL::ExecutableTargetAttr targetAttr) {
+  return targetAttr && targetAttr.getBackend().getValue().starts_with("rocm");
 }
 
 bool hasUkernel(IREE::HAL::ExecutableTargetAttr targetAttr,
@@ -232,6 +237,11 @@ bool isAArch64(IREE::HAL::ExecutableTargetAttr targetAttr) {
 bool isRISCV(IREE::HAL::ExecutableTargetAttr targetAttr) {
   std::optional<llvm::Triple> triple = getTargetTriple(targetAttr);
   return triple && triple.value().isRISCV();
+}
+
+bool isRISCV32(IREE::HAL::ExecutableTargetAttr targetAttr) {
+  std::optional<llvm::Triple> triple = getTargetTriple(targetAttr);
+  return triple && triple.value().isRISCV32();
 }
 
 bool isReadOnly(Value v) {
@@ -562,9 +572,9 @@ static std::optional<unsigned> getInterfaceWorkgroupOpDim(Value value) {
 /// form
 /// ```
 ///   %dim = arith.constant ... : index
-///   %id = flow.dispatch.workgroup.id[%dim]
-///   %count = flow.dispatch.workgroup.count[%dim]
-///   %size = flow.dispatch.workgroup.size[%dim]
+///   %id = stream.dispatch.workgroup.id[%dim]
+///   %count = stream.dispatch.workgroup.count[%dim]
+///   %size = stream.dispatch.workgroup.size[%dim]
 ///   %offset = affine.apply
 ///     affine_map<(d0)[s0, s1] -> (d0 + s0 * s1)>(%lb)[%id, %size]
 ///   %new_step = affine.apply
@@ -622,7 +632,7 @@ isTiledAndDistributedLoop(scf::ForOp forOp) {
   return loopInfo;
 }
 
-SmallVector<Operation *> getComputeOps(func::FuncOp funcOp) {
+SmallVector<Operation *> getComputeOps(mlir::FunctionOpInterface funcOp) {
   SmallVector<Operation *> computeOps;
   funcOp.walk([&](Operation *op) {
     if (isa<TilingInterface, IREE::Codegen::UKernelOpInterface>(op)) {
@@ -633,7 +643,7 @@ SmallVector<Operation *> getComputeOps(func::FuncOp funcOp) {
 }
 
 SmallVector<LoopTilingAndDistributionInfo>
-getTiledAndDistributedLoopInfo(func::FuncOp funcOp) {
+getTiledAndDistributedLoopInfo(mlir::FunctionOpInterface funcOp) {
   SmallVector<LoopTilingAndDistributionInfo> info;
   funcOp.walk([&](scf::ForOp forOp) {
     if (auto tiledLoopInfo = isTiledAndDistributedLoop(forOp)) {
@@ -641,6 +651,39 @@ getTiledAndDistributedLoopInfo(func::FuncOp funcOp) {
     }
   });
   return info;
+}
+
+void setSCFTileSizes(scf::SCFTilingOptions &options, TilingInterface op,
+                     ArrayRef<int64_t> tileSizes,
+                     ArrayRef<bool> tileScalableFlags) {
+  // scf::tileUsingSCFForOp expects the num of tile sizes = num of loops.
+  int numLoops = op.getLoopIteratorTypes().size();
+  SmallVector<int64_t> fixedTileSizes(tileSizes);
+  fixedTileSizes.resize(numLoops, /*default=*/0);
+  SmallVector<bool> fixedTileScalableFlags(tileScalableFlags);
+  fixedTileScalableFlags.resize(numLoops, /*default=*/false);
+  if (!llvm::is_contained(fixedTileScalableFlags, true)) {
+    // Non-scalable case: All constant tile sizes.
+    options.setTileSizes(
+        getAsIndexOpFoldResult(op.getContext(), fixedTileSizes));
+  } else {
+    // Scalable case: Multiply scalable tile sizes by a vector.vscale op.
+    options.setTileSizeComputationFunction(
+        [=](OpBuilder &b, Operation *op) -> SmallVector<OpFoldResult> {
+          auto loc = op->getLoc();
+          return llvm::map_to_vector(
+              llvm::zip(fixedTileSizes, fixedTileScalableFlags),
+              [&](auto pair) -> OpFoldResult {
+                auto [t, isScalable] = pair;
+                Value size = b.create<arith::ConstantIndexOp>(loc, t);
+                if (isScalable) {
+                  Value vscale = b.create<vector::VectorScaleOp>(loc);
+                  size = b.create<arith::MulIOp>(loc, size, vscale);
+                }
+                return size;
+              });
+        });
+  }
 }
 
 /// Create a linalg::GenericOp version of an n-D copy that can further tile,
@@ -734,6 +777,58 @@ linalg::LinalgLoopDistributionOptions getIREELinalgLoopDistributionOptions(
   }};
 }
 
+static constexpr char pipeliningDepthName[] = "pipeline_depth";
+static constexpr char pipeliningStageName[] = "store_stage";
+
+DictionaryAttr
+getSoftwarePipeliningAttrDict(MLIRContext *context,
+                              unsigned softwarePipelineDepth,
+                              unsigned softwarePipelineStoreStage) {
+  SmallVector<NamedAttribute> attrs;
+  attrs.push_back(
+      {StringAttr::get(context, pipeliningDepthName),
+       IntegerAttr::get(IntegerType::get(context, 64), softwarePipelineDepth)});
+  attrs.push_back({StringAttr::get(context, pipeliningStageName),
+                   IntegerAttr::get(IntegerType::get(context, 64),
+                                    softwarePipelineStoreStage)});
+  return DictionaryAttr::get(context, attrs);
+}
+
+FailureOr<int64_t> getSoftwarePipelineDepth(DictionaryAttr config) {
+  if (!config) {
+    return failure();
+  }
+  Attribute depth = config.get(pipeliningDepthName);
+  if (!depth) {
+    return failure();
+  }
+  return llvm::cast<IntegerAttr>(depth).getInt();
+}
+
+FailureOr<int64_t> getSoftwarePipelineStoreStage(DictionaryAttr config) {
+  if (!config) {
+    return failure();
+  }
+  Attribute stage = config.get(pipeliningStageName);
+  if (!stage) {
+    return failure();
+  }
+  return llvm::cast<IntegerAttr>(stage).getInt();
+}
+
+static constexpr char mmaTypeListName[] = "mma_intrinsics";
+
+FailureOr<ArrayAttr> getSupportedMmaTypes(DictionaryAttr config) {
+  if (!config) {
+    return failure();
+  }
+  Attribute types = config.get(mmaTypeListName);
+  if (!types) {
+    return failure();
+  }
+  return llvm::cast<ArrayAttr>(types);
+}
+
 //===---------------------------------------------------------------------===//
 // Misc. utility functions
 //===---------------------------------------------------------------------===//
@@ -760,6 +855,104 @@ OpFoldResult convertByteOffsetToElementOffset(RewriterBase &rewriter,
     return affine::makeComposedFoldedAffineApply(rewriter, loc, s0.floorDiv(s1),
                                                  {byteOffset, elementByteSize});
   }
+}
+
+LogicalResult isArgmaxOp(linalg::GenericOp genericOp) {
+  // Check for 2 results(value, index), and 1 input
+  if (genericOp.getNumDpsInits() != 2) {
+    return failure();
+  }
+  if (genericOp.getNumDpsInputs() != 1) {
+    return failure();
+  }
+
+  // If max value is being used, it is not a pure argmax.
+  if (!genericOp.getResults()[0].use_empty()) {
+    return failure();
+  }
+
+  // Check that the rank is at least 3 and all loops are parallel
+  unsigned numLoops = genericOp.getNumLoops();
+  unsigned numParallelLoops = genericOp.getNumParallelLoops();
+
+  // Argmax will require 1D reduction.
+  if (numParallelLoops != (numLoops - 1)) {
+    return failure();
+  }
+  // TODO: Add better affine map checks.
+  auto indexing_maps = genericOp.getIndexingMapsArray();
+  if (!indexing_maps[0].isIdentity())
+    return failure();
+
+  // Check that initial value is negative Infinite.
+  // TODO: Move this check to ukernel once we implement
+  //       variant to handle non neg-Inf initial value.
+  Value initVal = genericOp.getDpsInitOperand(0)->get();
+  auto fillOp = initVal.getDefiningOp<linalg::FillOp>();
+  if (!fillOp)
+    return failure();
+  Value fillVal = fillOp.getDpsInputOperand(0)->get();
+  if (!matchPattern(fillVal, m_NegInfFloat()))
+    return failure();
+
+  // Work back from linalg.yield and check body of genericOp.
+  // The genericOp should yield the result of an arith.select,
+  // preceded by an arith.cmpf, arith.maximumf, and arith.extui
+  auto yieldOp = cast<linalg::YieldOp>(genericOp.getBody()->getTerminator());
+  Value producerOutput;
+  Operation *producer;
+
+  // Producer of linalg.yield 1st arg is arith.maximumf
+  {
+    producerOutput = yieldOp->getOperand(0);
+    producer = producerOutput.getDefiningOp();
+    if (!producer || producer->getNumOperands() == 0) {
+      return failure();
+    }
+    if (!matchPattern(producer, m_Op<arith::MaximumFOp>())) {
+      return failure();
+    }
+  }
+
+  // Producer of linalg.yield op 2nd arg is arith.select
+  // TODO: Add check that select is selecting between linalg.index and index of
+  // current max.
+  {
+    producerOutput = yieldOp->getOperand(1);
+    producer = producerOutput.getDefiningOp();
+    if (!producer || producer->getNumOperands() == 0) {
+      return failure();
+    }
+    if (!matchPattern(producer, m_Op<arith::SelectOp>())) {
+      return failure();
+    }
+  }
+
+  // Producer of arith.select op is arith.cmpf
+  {
+    producerOutput = producer->getOperand(0);
+    producer = producerOutput.getDefiningOp();
+    if (!producer || producer->getNumOperands() == 0) {
+      return failure();
+    }
+    auto producerCmpFOp = dyn_cast<arith::CmpFOp>(producer);
+    if (!producerCmpFOp) {
+      return failure();
+    }
+    if (producerCmpFOp.getPredicate() != arith::CmpFPredicate::OGT) {
+      return failure();
+    }
+
+    // Check that in and out of cmpf are loop variables.
+    // Currently first operand is disabled because it may be mixed type
+    // which would lead it to be extf(%arg0).
+    // TODO: Add better mixed type support check.
+    if (producer->getOperand(1) != genericOp.getBody()->getArgument(1)) {
+      return failure();
+    }
+  }
+
+  return success();
 }
 
 //===---------------------------------------------------------------------===//
@@ -854,7 +1047,7 @@ void replaceMemrefUsesAndPropagateType(RewriterBase &rewriter, Location loc,
       for (OpOperand &use : original.getUses()) {
         Operation *user = use.getOwner();
         // Some uses cannot be replaced.
-        if (isa<func::ReturnOp, scf::YieldOp>(user)) {
+        if (user->hasTrait<OpTrait::ReturnLike>()) {
           LLVM_DEBUG({
             llvm::dbgs() << "\tUnhandled user : ";
             user->print(llvm::dbgs(), OpPrintingFlags().assumeVerified());
@@ -940,7 +1133,7 @@ void sinkOpsInCFG(const SmallVector<Operation *> &allocs,
 }
 
 /// Infer the number of workgroups from exportOp.
-SmallVector<int64_t> getStaticNumWorkgroups(func::FuncOp funcOp) {
+SmallVector<int64_t> getStaticNumWorkgroups(mlir::FunctionOpInterface funcOp) {
   SmallVector<int64_t> result;
   FailureOr<IREE::HAL::ExecutableExportOp> exportOp = getEntryPoint(funcOp);
   if (failed(exportOp))
@@ -984,5 +1177,4 @@ bool hasFusedLeadingOp(linalg::LinalgOp rootOp) {
   });
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

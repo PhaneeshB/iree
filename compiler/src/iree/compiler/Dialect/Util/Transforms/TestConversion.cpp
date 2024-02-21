@@ -12,15 +12,11 @@
 #include "iree/compiler/Dialect/Util/Transforms/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace Util {
+namespace mlir::iree_compiler::IREE::Util {
 
 namespace {
 
@@ -29,9 +25,9 @@ public:
   TestConversionPass() = default;
   TestConversionPass(const TestConversionPass &) {}
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<IREE::Util::UtilDialect, func::FuncDialect,
-                    mlir::arith::ArithDialect, math::MathDialect,
-                    mlir::affine::AffineDialect, memref::MemRefDialect>();
+    registry.insert<IREE::Util::UtilDialect, mlir::arith::ArithDialect,
+                    math::MathDialect, mlir::affine::AffineDialect,
+                    memref::MemRefDialect>();
   }
 
   void runOnOperation() override {
@@ -80,7 +76,4 @@ std::unique_ptr<OperationPass<ModuleOp>> createTestConversionPass() {
   return std::make_unique<TestConversionPass>();
 }
 
-} // namespace Util
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::Util

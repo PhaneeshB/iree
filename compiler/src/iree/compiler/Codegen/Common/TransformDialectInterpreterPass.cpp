@@ -6,7 +6,7 @@
 
 #include "iree/compiler/Codegen/Common/PassDetail.h"
 #include "iree/compiler/Codegen/Common/Passes.h"
-#include "iree/compiler/Codegen/Dialect/IREECodegenDialect.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenDialect.h"
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
 #include "mlir/Dialect/Transform/Transforms/TransformInterpreterPassBase.h"
 #include "mlir/Dialect/Transform/Transforms/TransformInterpreterUtils.h"
@@ -70,17 +70,21 @@ public:
 };
 } // namespace
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
-extern llvm::cl::opt<std::string> clCodegenTransformDialectStrategyName;
 extern llvm::cl::opt<std::string> clCodegenTransformDialectLibraryFileName;
 
 /// Create a Transform dialect interpreter pass.
-std::unique_ptr<Pass> createTransformDialectInterpreterPass() {
+std::unique_ptr<Pass>
+createTransformDialectInterpreterPass(StringRef transformSequenceName) {
+  StringRef libraryPath = "";
+  SmallVector<StringRef, 2> parts;
+  llvm::SplitString(llvm::StringRef(clCodegenTransformDialectLibraryFileName),
+                    parts, "@");
+  if (!parts.empty()) {
+    libraryPath = parts[0];
+  }
   return std::make_unique<TransformDialectInterpreterPass>(
-      clCodegenTransformDialectLibraryFileName,
-      clCodegenTransformDialectStrategyName);
+      libraryPath, transformSequenceName);
 }
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

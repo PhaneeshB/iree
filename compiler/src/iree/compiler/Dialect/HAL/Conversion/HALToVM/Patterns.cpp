@@ -17,7 +17,6 @@
 #include "iree/compiler/Dialect/VM/Conversion/TypeConverter.h"
 #include "iree/compiler/Dialect/VM/Conversion/UtilToVM/ConvertUtilToVM.h"
 #include "iree/compiler/Dialect/VM/IR/VMOps.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -25,8 +24,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 extern void populateHALAllocatorToVMPatterns(MLIRContext *context,
                                              SymbolTable &importSymbols,
@@ -52,6 +50,10 @@ extern void populateHALDeviceToVMPatterns(MLIRContext *context,
                                           SymbolTable &importSymbols,
                                           TypeConverter &typeConverter,
                                           RewritePatternSet &patterns);
+extern void populateHALDevicesToVMPatterns(MLIRContext *context,
+                                           SymbolTable &importSymbols,
+                                           TypeConverter &typeConverter,
+                                           RewritePatternSet &patterns);
 extern void populateHALExecutableToVMPatterns(MLIRContext *context,
                                               SymbolTable &importSymbols,
                                               TypeConverter &typeConverter,
@@ -80,6 +82,8 @@ void populateHALToVMPatterns(MLIRContext *context, SymbolTable &importSymbols,
                                        patterns);
   populateHALDeviceToVMPatterns(context, importSymbols, typeConverter,
                                 patterns);
+  populateHALDevicesToVMPatterns(context, importSymbols, typeConverter,
+                                 patterns);
   populateHALExecutableToVMPatterns(context, importSymbols, typeConverter,
                                     patterns);
   populateHALExperimentalToVMPatterns(context, importSymbols, typeConverter,
@@ -156,5 +160,4 @@ static PassRegistration<ConvertHALToVMPass> pass([] {
   return std::make_unique<ConvertHALToVMPass>(options);
 });
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

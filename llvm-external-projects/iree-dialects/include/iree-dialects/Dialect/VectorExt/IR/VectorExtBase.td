@@ -12,6 +12,8 @@ include "mlir/IR/OpBase.td"
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/EnumAttr.td"
 
+include "iree-dialects/Dialect/VectorExt/IR/VectorExtInterfaces.td"
+
 //===----------------------------------------------------------------------===//
 // Dialect definition
 //===----------------------------------------------------------------------===//
@@ -27,46 +29,26 @@ def IREEVectorExt_Dialect : Dialect {
     beyond what is currently available in the Vector Dialect.
   }];
   let useDefaultAttributePrinterParser = 1;
+  let extraClassDeclaration = [{
+    void registerAttributes();
+  }];
 }
 
 //===---------------------------------------------------------------------===//
-// Vector layout attributes
+// Vector layout attribute helpers
 //===---------------------------------------------------------------------===//
 
 class IREEVectorExt_Attr<string name, list<Trait> traits = []>
   : AttrDef<IREEVectorExt_Dialect, name, traits>;
 
-def PerDimLayoutAttr : IREEVectorExt_Attr<"PerDimLayout"> {
-   let mnemonic = "per_dim_layout";
-   let summary = [{high-dimensional vector register layout for a given vector dimension}];
-   let description = [{
-    This attribute describes the per dimension register layout for a given vector
-    that could be prescribed by an operator such as matrix multiplication.
-    This is a way to explicitly represent the layout in the IR
-    when it is in the SIMD form prior to converting to the SIMT form so that
-    we can reason about layouts, propagating layouts and layout conflicts.
-   }];
-   let parameters = (ins
-     ArrayRefParameter<"std::string", "labels for the high dimensional layout dims">:$labels,
-     ArrayRefParameter<"int64_t", "shapes for the high dimensional layout dims">:$shapes
-   );
-   let hasCustomAssemblyFormat = 1;
-   let genVerifyDecl = 0;
+class IREEVectorExt_I32EnumAttr<string name, string summary, list<I32EnumAttrCase> cases>
+    : I32EnumAttr<name, summary, cases> {
+  let cppNamespace = "::mlir::iree_compiler::IREE::VectorExt";
+  let genSpecializedAttr = 0;
 }
 
-def LayoutAttr : IREEVectorExt_Attr<"Layout"> {
-  let mnemonic = "layout";
-  let summary = [{high-dimensional vector register layout for a given vector}];
-  let description = [{
-    This contains a complete specification of the layout for a given vector,
-    whereas the attribute above only specifies the per dimension layout.
-  }];
-  let parameters = (ins
-    ArrayRefParameter<"PerDimLayoutAttr", "layout for each dimension of the vector">:$layouts
-  );
-  let hasCustomAssemblyFormat = 1;
-  let genVerifyDecl = 0;
-}
+class IREEVectorExt_EnumAttr<EnumAttrInfo enumInfo, string name = "">
+  : EnumAttr<IREEVectorExt_Dialect, enumInfo, name>;
 
 #endif // IREE_DIALECT_VECTOREXT_BASE
 

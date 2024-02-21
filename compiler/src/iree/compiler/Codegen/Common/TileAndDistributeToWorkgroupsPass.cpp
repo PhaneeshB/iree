@@ -20,7 +20,7 @@
 #include "iree/compiler/Codegen/Common/PassDetail.h"
 #include "iree/compiler/Codegen/Common/Passes.h"
 #include "iree/compiler/Codegen/Common/Transforms.h"
-#include "iree/compiler/Codegen/Dialect/IREECodegenAttrs.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenAttrs.h"
 #include "iree/compiler/Codegen/Interfaces/PartitionableLoopsInterface.h"
 #include "iree/compiler/Codegen/Transforms/Transforms.h"
 #include "iree/compiler/Codegen/Utils/Utils.h"
@@ -43,8 +43,7 @@
 
 #define DEBUG_TYPE "iree-codegen-tile-and-distribute-to-workgroups"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 /// Method to return the configuration to use for first-level tile and
 /// distribute. Returns the
@@ -158,7 +157,7 @@ static LogicalResult lowerDispatchWorkgroupCountForDagRootOp(
 
         int64_t staticLoopRange = std::get<1>(p);
         OpFoldResult workload =
-            (staticLoopRange == ShapedType::kDynamic
+            (ShapedType::isDynamic(staticLoopRange)
                  ? OpFoldResult(std::get<0>(p))
                  : OpFoldResult(rewriter.getIndexAttr(staticLoopRange)));
         AffineExpr s0, s1;
@@ -207,7 +206,7 @@ static LogicalResult lowerDispatchWorkgroupCountForDagRootOp(
 /// Lowers the computation within the workgroup count region for the ops
 /// that are handled by default.
 static LogicalResult lowerWorkgroupCount(
-    RewriterBase &rewriter, func::FuncOp entryPointFn,
+    RewriterBase &rewriter, mlir::FunctionOpInterface entryPointFn,
     ArrayRef<OpFoldResult> workgroupCount, ArrayRef<int64_t> tileSizes,
     ArrayRef<int64_t> staticLoopRanges, ArrayRef<int64_t> interchange,
     ArrayRef<unsigned> partitionedLoops, int maxWorkgroupParallelDims) {
@@ -292,10 +291,29 @@ void TileAndDistributeToWorkgroupsPass::runOnOperation() {
         "maxWorkgroupParallelDims set to more than allowed MaxParallelDims");
   }
 
-  for (func::FuncOp funcOp : innerModule.getOps<func::FuncOp>()) {
+  for (auto funcOp : innerModule.getOps<mlir::FunctionOpInterface>()) {
     auto exportOp = entryPoints.lookup(funcOp.getName());
     if (!exportOp)
       continue;
+
+    Block *body = exportOp.getWorkgroupCountBody();
+    if (!body) {
+      exportOp.emitOpError("unexpected empty workgroup count region");
+      return signalPassFailure();
+    }
+
+    // If the function has already lowered the workgroup count region, infer
+    // that tiling + distribution has already occurred.
+    WalkResult res = body->walk([&](Operation *op) {
+      if (isa<IREE::Flow::DispatchWorkgroupCountFromSliceOp,
+              IREE::Flow::DispatchWorkgroupCountFromDagRootOp>(op)) {
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (!res.wasInterrupted()) {
+      continue;
+    }
 
     SmallVector<Operation *> computeOps = getComputeOps(funcOp);
     SmallVector<int64_t> tileSizes, staticLoopRanges, interchange;
@@ -440,5 +458,4 @@ createTileAndDistributeToWorkgroupsPass(
       maxWorkgroupParallelDims, distributionMethod);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

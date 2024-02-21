@@ -13,17 +13,9 @@ if(IREE_TARGET_BACKEND_LLVM_CPU)
   list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::LLVMCPU)
   list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_LLVM_CPU_TARGET")
 endif()
-if(IREE_TARGET_BACKEND_VMVX)
-  list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::VMVX)
-  list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_VMVX_TARGET")
-endif()
 if(IREE_TARGET_BACKEND_VULKAN_SPIRV)
   list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::VulkanSPIRV)
   list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_VULKANSPIRV_TARGET")
-endif()
-if(IREE_TARGET_BACKEND_ROCM)
-  list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::ROCM)
-  list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_ROCM_TARGET")
 endif()
 
 set(IREE_VERSION_TARGET_COPTS "")
@@ -49,7 +41,8 @@ iree_cc_library(
     MLIRIR
     iree::compiler::Bindings::Native::Transforms
     iree::compiler::Bindings::TFLite::Transforms
-    iree::compiler::Codegen::Dialect::IREECodegenDialect
+    iree::compiler::Codegen::Dialect::Codegen::IR::IREECodegenDialect
+    iree::compiler::Codegen::Dialect::GPU::IR::IREEGPUDialect
     iree::compiler::Codegen::Interfaces::Interfaces
     iree::compiler::ConstEval
     iree::compiler::Dialect::Flow::IR
@@ -60,6 +53,7 @@ iree_cc_library(
     iree::compiler::Dialect::Stream::Transforms
     iree::compiler::Dialect::Util::IR
     iree::compiler::Dialect::Util::IR::ExternalModels
+    iree::compiler::Dialect::Util::TransformOps
     iree::compiler::Dialect::Util::Transforms
     iree::compiler::Dialect::VM::Analysis
     iree::compiler::Dialect::VM::IR
@@ -68,14 +62,17 @@ iree_cc_library(
     iree::compiler::Dialect::VMVX::IR::VMVXDialect
     iree::compiler::Dialect::VMVX::Transforms
     iree::compiler::Dialect::Vulkan::IR
+    iree::compiler::GlobalOptimization::Interfaces::Interfaces
     iree::compiler::InputConversion::Common
     iree::compiler::Modules::HAL::Inline::IR::HALInlineDialect
     iree::compiler::Modules::HAL::Inline::Transforms
     iree::compiler::Modules::HAL::Loader::IR::HALLoaderDialect
     iree::compiler::Modules::HAL::Loader::Transforms
     iree::compiler::Modules::IO::Parameters::IR::IOParametersDialect
+    iree::compiler::Modules::IO::Parameters::Transforms
     iree::compiler::Pipelines
     iree::compiler::Preprocessing::Passes
+    iree::compiler::Preprocessing::TransformExtensions::PreprocessingExtensions
   PUBLIC
 )
 
@@ -111,9 +108,21 @@ iree_cc_library(
     MLIRFuncDialect
     MLIRFuncToSPIRV
     MLIRTensorInferTypeOpInterfaceImpl
+    MLIRTransformDialect
     MLIRTransforms
     MLIRVectorDialect
     iree::compiler::Dialect::VM::Target::init_targets
+
+    MLIRAffineTransformOps
+    MLIRBufferizationTransformOps
+    MLIRFuncTransformOps
+    MLIRGPUTransformOps
+    MLIRLinalgTransformOps
+    MLIRMemRefTransformOps
+    MLIRSCFTransformOps
+    MLIRTensorTransformOps
+    MLIRVectorTransformOps
+    MLIRTransformLoopExtension
   PUBLIC
 )
 

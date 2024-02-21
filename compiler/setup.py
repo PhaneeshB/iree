@@ -251,14 +251,16 @@ def prepare_installation():
             "-GNinja",
             "--log-level=VERBOSE",
             "-DIREE_BUILD_PYTHON_BINDINGS=ON",
-            "-DIREE_BUILD_SAMPLES=OFF",
-            "-DIREE_BUILD_TESTS=OFF",
             # Disable .so.0 style symlinking. Python wheels don't preserve links,
             # so this ~doubles the binary size if not disabled (yikes!).
             "-DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON",
+            "-DIREE_BUILD_TESTS=OFF",
+            "-DIREE_BUILD_SAMPLES=OFF",
             "-DPython3_EXECUTABLE={}".format(sys.executable),
             "-DCMAKE_BUILD_TYPE={}".format(cfg),
             # TODO(scotttodd): include IREE_TARGET_BACKEND_WEBGPU here (and in env)
+            get_env_cmake_option("IREE_TARGET_BACKEND_ROCM"),
+            get_env_cmake_option("IREE_TARGET_BACKEND_OPENCL_SPIRV"),
             get_env_cmake_option("IREE_ENABLE_CPUINFO", "ON"),
             get_env_cmake_option("IREE_TARGET_BACKEND_ROCM", "ON"),
             get_env_cmake_option("IREE_ENABLE_LLD", "OFF"),
@@ -456,6 +458,7 @@ setup(
             # TODO: We have renamed to iree-compile on 2022-03-18. Remove
             # this alias once no longer needed.
             "ireec = iree.compiler.tools.scripts.ireec.__main__:main",
+            "iree-import-onnx = iree.compiler.tools.import_onnx.__main__:_cli_main",
             "iree-ir-tool = iree.compiler.tools.ir_tool.__main__:_cli_main",
         ],
     },
@@ -463,4 +466,9 @@ setup(
         "numpy",
         "PyYAML",
     ],
+    extras_require={
+        "onnx": [
+            "onnx>=1.15.0",
+        ],
+    },
 )

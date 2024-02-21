@@ -10,13 +10,11 @@
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
 #include "mlir/Dialect/Transform/IR/TransformInterfaces.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 
 namespace mlir {
-class DialectRegistry;
 
-namespace func {
-class FuncOp;
-}
+class DialectRegistry;
 
 namespace scf {
 class ForallOp;
@@ -29,22 +27,22 @@ class VectorDialect;
 class WarpExecuteOnLane0Op;
 } // namespace vector
 
-namespace iree_compiler {
+} // namespace mlir
+
+namespace mlir::iree_compiler {
 
 /// Registers Flow transformations that require IREE-specific information into
 /// the transform dialect.
 void registerTransformDialectLLVMGPUExtension(DialectRegistry &registry);
 
-namespace IREE {
-namespace transform_dialect {
+namespace IREE::transform_dialect {
 // Hook to register LLVMGPU transformations to the transform dialect.
 class LLVMGPUExtensions
     : public transform::TransformDialectExtension<LLVMGPUExtensions> {
 public:
   LLVMGPUExtensions();
 };
-} // namespace transform_dialect
-} // namespace IREE
+} // namespace IREE::transform_dialect
 
 /// Transformation to convert scf.forall to gpu distribution.
 FailureOr<SmallVector<OpFoldResult>>
@@ -52,8 +50,7 @@ rewriteForallToGpu(scf::ForallOp forallOp,
                    const SmallVector<int64_t> &globalWorkgroupSizes,
                    RewriterBase &rewriter, bool syncAfterDistribute = true);
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler
 
 #define GET_OP_CLASSES
 #include "iree/compiler/Codegen/LLVMGPU/TransformExtensions/LLVMGPUExtensionsOps.h.inc"

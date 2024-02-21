@@ -15,13 +15,11 @@
 #include "iree/compiler/Dialect/Stream/IR/StreamTypes.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -52,9 +50,9 @@ struct ContextResolveOpPattern
     auto resultTypes = llvm::to_vector(resolveOp.getResultTypes());
     assert(!resultTypes.empty() && "must have at least one result");
 
-    // TODO(benvanik): make this do multi-device lookup and other fancy things.
+    // TODO(multi-device): emit get with derived ordinal or lookup with attr.
     Value device =
-        rewriter.create<IREE::HAL::ExSharedDeviceOp>(resolveOp.getLoc());
+        IREE::HAL::DeviceType::resolveAny(resolveOp.getLoc(), rewriter);
 
     SmallVector<Value> results;
     if (resultTypes[0].isa<IREE::HAL::DeviceType>()) {
@@ -484,12 +482,10 @@ struct TensorExportBufferViewOpPattern
 
     // NOTE: we should have verified supported encodings/types at entry into the
     // HAL pipeline.
-    auto encodingType =
-        IREE::HAL::getEncodingTypeValue(tensorType.getEncoding());
-    assert(encodingType.has_value() && "invalid tensor encoding");
-    auto elementType =
-        IREE::HAL::getElementTypeValue(tensorType.getElementType());
-    assert(elementType.has_value() && "invalid tensor element type");
+    auto encodingType = rewriter.create<IREE::HAL::EncodingTypeOp>(
+        loc, tensorType.getEncoding());
+    auto elementType = rewriter.create<IREE::HAL::ElementTypeOp>(
+        loc, tensorType.getElementType());
 
     // Flatten static + dynamic shape dimensions.
     SmallVector<Value> dims;
@@ -506,8 +502,7 @@ struct TensorExportBufferViewOpPattern
     rewriter.replaceOpWithNewOp<IREE::HAL::BufferViewCreateOp>(
         exportOp, adaptor.getSource(),
         rewriter.create<arith::ConstantIndexOp>(loc, 0),
-        adaptor.getSourceSize(), elementType.value(), encodingType.value(),
-        dims);
+        adaptor.getSourceSize(), elementType, encodingType, dims);
     return success();
   }
 };
@@ -679,7 +674,7 @@ struct CmdDispatchOpPattern
     // Get the device handle we're executing against in this execution region.
     // Note that this is a dynamic value: we have to treat the device as unknown
     // here.
-    auto deviceValue = rewriter.create<IREE::HAL::CommandBufferDeviceOp>(
+    Value device = rewriter.create<IREE::HAL::CommandBufferDeviceOp>(
         loc, rewriter.getType<IREE::HAL::DeviceType>(), commandBuffer);
 
     // Prepare for variant switch table by gathering the conditions selecting
@@ -704,7 +699,7 @@ struct CmdDispatchOpPattern
           auto exportOp = caseExportOps[i].second;
           auto variantOp =
               exportOp->getParentOfType<IREE::HAL::ExecutableVariantOp>();
-          return variantOp.buildCondition(deviceValue, rewriter);
+          return variantOp.buildCondition(device, rewriter);
         },
         rewriter);
 
@@ -719,12 +714,12 @@ struct CmdDispatchOpPattern
       auto caseBuilder = OpBuilder::atBlockBegin(&caseBlock);
 
       // Record push constants and buffer bindings.
-      recordParameters(loc, deviceValue, commandBuffer, dispatchOp, adaptor,
+      recordParameters(loc, device, commandBuffer, dispatchOp, adaptor,
                        exportOp.getLayout(), caseBuilder);
 
       // Dispatch with a target-specific workgroup count.
       auto caseWorkgroupCount = exportOp.calculateWorkgroupCount(
-          loc, deviceValue, adaptor.getWorkload(), caseBuilder);
+          loc, device, adaptor.getWorkload(), caseBuilder);
       caseBuilder.create<IREE::HAL::CommandBufferDispatchSymbolOp>(
           loc, commandBuffer, entryPointAttr, caseWorkgroupCount[0],
           caseWorkgroupCount[1], caseWorkgroupCount[2]);
@@ -822,13 +817,14 @@ struct CmdFuncOpPattern
                                                 newResultTypes))) {
       return rewriter.notifyMatchFailure(funcOp, "failed to convert types");
     }
-    auto newOp = rewriter.replaceOpWithNewOp<func::FuncOp>(
-        funcOp, funcOp.getName(),
+    auto newOp = rewriter.replaceOpWithNewOp<IREE::Util::FuncOp>(
+        funcOp, funcOp.getNameAttr(),
         rewriter.getFunctionType(newArgTypes, newResultTypes),
-        funcOp.getSymVisibilityAttr(),
+        /*tied_operands=*/ArrayAttr{}, funcOp.getSymVisibilityAttr(),
         rewriter.getArrayAttr(
             ArrayRef<Attribute>(newArgAttrs.data(), newArgAttrs.size())),
-        funcOp.getAllResultAttrs());
+        funcOp.getAllResultAttrs(),
+        /*inlining_policy=*/IREE::Util::InliningPolicyAttrInterface{});
     newOp->setDialectAttrs(funcOp->getDialectAttrs());
     return success();
   }
@@ -871,8 +867,9 @@ struct CmdCallOpPattern
       llvm::append_range(resultTypes, convertedTypes);
     }
 
-    rewriter.replaceOpWithNewOp<func::CallOp>(callOp, callOp.getCalleeAttr(),
-                                              resultTypes, operands);
+    rewriter.replaceOpWithNewOp<IREE::Util::CallOp>(
+        callOp, resultTypes, callOp.getCallee(), operands,
+        /*tied_operands=*/ArrayAttr{});
     return success();
   }
 };
@@ -1253,7 +1250,7 @@ struct GlobalTimepointConversionPattern
       return failure();
     if (!llvm::isa<IREE::Stream::TimepointAttr>(*initialValue))
       return failure();
-    rewriter.updateRootInPlace(op, [&]() { op.removeInitialValueAttr(); });
+    rewriter.modifyOpInPlace(op, [&]() { op.removeInitialValueAttr(); });
     return success();
   }
 };
@@ -1327,5 +1324,4 @@ void populateStreamToHALPatterns(MLIRContext *context,
   patterns.insert<ElideYieldOpPattern>(mapping, typeConverter, context);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

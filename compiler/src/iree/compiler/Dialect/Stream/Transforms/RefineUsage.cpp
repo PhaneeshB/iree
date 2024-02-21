@@ -9,14 +9,12 @@
 #include "iree/compiler/Dialect/Stream/Analysis/ResourceUsage.h"
 #include "iree/compiler/Dialect/Stream/IR/StreamDialect.h"
 #include "iree/compiler/Dialect/Stream/IR/StreamOps.h"
-#include "iree/compiler/Dialect/Stream/Transforms/PassDetail.h"
 #include "iree/compiler/Dialect/Stream/Transforms/Passes.h"
 #include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
@@ -27,10 +25,11 @@
 
 #define DEBUG_TYPE "iree-stream-refine-usage"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace Stream {
+namespace mlir::iree_compiler::IREE::Stream {
+
+#define GEN_PASS_DEF_REFINEUSAGEPASS
+#include "iree/compiler/Dialect/Stream/Transforms/Passes.h.inc"
+
 namespace {
 
 //===----------------------------------------------------------------------===//
@@ -188,7 +187,7 @@ struct UsageRefinementPattern : public OpRewritePattern<OpT> {
   // Returns true if a change was made.
   bool applyRegionTransitions(Operation *op, PatternRewriter &rewriter) const {
     bool didChange = false;
-    rewriter.startRootUpdate(op);
+    rewriter.startOpModification(op);
     for (auto &region : op->getRegions()) {
       for (auto &block : region) {
         rewriter.setInsertionPoint(&block, block.begin());
@@ -200,9 +199,9 @@ struct UsageRefinementPattern : public OpRewritePattern<OpT> {
       }
     }
     if (didChange) {
-      rewriter.finalizeRootUpdate(op);
+      rewriter.finalizeOpModification(op);
     } else {
-      rewriter.cancelRootUpdate(op);
+      rewriter.cancelOpModification(op);
     }
     return didChange;
   }
@@ -224,9 +223,9 @@ struct ApplyInitializerOp
 // Applies usage analysis results to an MLIR function.
 // All resource arguments and results, block arguments, and nested operations
 // will have their lifetime specified.
-struct ApplyFuncOp : public UsageRefinementPattern<mlir::func::FuncOp> {
-  using UsageRefinementPattern<mlir::func::FuncOp>::UsageRefinementPattern;
-  LogicalResult matchAndRewrite(mlir::func::FuncOp op,
+struct ApplyFuncOp : public UsageRefinementPattern<IREE::Util::FuncOp> {
+  using UsageRefinementPattern<IREE::Util::FuncOp>::UsageRefinementPattern;
+  LogicalResult matchAndRewrite(IREE::Util::FuncOp op,
                                 PatternRewriter &rewriter) const override {
     if (op.isExternal()) {
       return rewriter.notifyMatchFailure(op, "external funcs not supported");
@@ -255,7 +254,7 @@ struct ApplyFuncOp : public UsageRefinementPattern<mlir::func::FuncOp> {
 
     // Results:
     SmallVector<Type> newOutputs;
-    auto anyReturnOp = *op.getOps<mlir::func::ReturnOp>().begin();
+    auto anyReturnOp = *op.getOps<IREE::Util::ReturnOp>().begin();
     for (auto outputType : llvm::enumerate(op.getFunctionType().getResults())) {
       auto oldType =
           llvm::dyn_cast<IREE::Stream::ResourceType>(outputType.value());
@@ -345,7 +344,7 @@ struct ApplyGenericOp : public UsageRefinementPattern<Op> {
   LogicalResult matchAndRewrite(Op op,
                                 PatternRewriter &rewriter) const override {
     bool didChange = this->applyRegionTransitions(op, rewriter);
-    rewriter.startRootUpdate(op);
+    rewriter.startOpModification(op);
     rewriter.setInsertionPointAfter(op);
     for (unsigned i = 0; i < op->getNumResults(); ++i) {
       auto result = op->getResult(i);
@@ -355,9 +354,9 @@ struct ApplyGenericOp : public UsageRefinementPattern<Op> {
       }
     }
     if (didChange) {
-      rewriter.finalizeRootUpdate(op);
+      rewriter.finalizeOpModification(op);
     } else {
-      rewriter.cancelRootUpdate(op);
+      rewriter.cancelOpModification(op);
     }
     return success(didChange);
   }
@@ -376,7 +375,7 @@ struct ApplyStreamableOp : public UsageRefinementPattern<Op> {
     bool didChange = this->applyRegionTransitions(op, rewriter);
     auto affinityAttr = getOpAffinity(op);
 
-    rewriter.startRootUpdate(op);
+    rewriter.startOpModification(op);
     rewriter.setInsertionPointAfter(op);
 
     auto sizeAwareOp =
@@ -394,9 +393,9 @@ struct ApplyStreamableOp : public UsageRefinementPattern<Op> {
     }
 
     if (didChange) {
-      rewriter.finalizeRootUpdate(op);
+      rewriter.finalizeOpModification(op);
     } else {
-      rewriter.cancelRootUpdate(op);
+      rewriter.cancelOpModification(op);
     }
     return success(didChange);
   }
@@ -410,7 +409,7 @@ static void insertUsageRefinementPatterns(MLIRContext *context,
                   ApplyScfWhileOp>(context, analysis);
   patterns.insert<ApplyGenericOp<IREE::Util::OptimizationBarrierOp>,
                   ApplyGenericOp<mlir::arith::SelectOp>,
-                  ApplyGenericOp<mlir::func::CallOp>,
+                  ApplyGenericOp<IREE::Util::CallOp>,
                   ApplyGenericOp<mlir::scf::ConditionOp>,
                   ApplyGenericOp<mlir::scf::YieldOp>,
                   ApplyGenericOp<IREE::Stream::TimepointBarrierOp>>(context,
@@ -440,20 +439,11 @@ static void insertUsageRefinementPatterns(MLIRContext *context,
 }
 
 //===----------------------------------------------------------------------===//
-// -iree-stream-refine-usage
+// --iree-stream-refine-usage
 //===----------------------------------------------------------------------===//
 
-class RefineUsagePass : public RefineUsageBase<RefineUsagePass> {
-public:
-  RefineUsagePass() = default;
-
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<mlir::func::FuncDialect>();
-    registry.insert<mlir::scf::SCFDialect>();
-    registry.insert<IREE::Stream::StreamDialect>();
-    registry.insert<IREE::Util::UtilDialect>();
-  }
-
+struct RefineUsagePass
+    : public IREE::Stream::impl::RefineUsagePassBase<RefineUsagePass> {
   void runOnOperation() override {
     auto moduleOp = getOperation();
     if (moduleOp.getBody()->empty())
@@ -481,11 +471,4 @@ public:
 
 } // namespace
 
-std::unique_ptr<OperationPass<mlir::ModuleOp>> createRefineUsagePass() {
-  return std::make_unique<RefineUsagePass>();
-}
-
-} // namespace Stream
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::Stream

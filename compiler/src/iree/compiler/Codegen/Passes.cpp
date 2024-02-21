@@ -6,6 +6,7 @@
 
 #include "iree/compiler/Codegen/Passes.h"
 #include "mlir/Pass/PassManager.h"
+
 //===---------------------------------------------------------------------===//
 // Include pass headers per target device
 //===---------------------------------------------------------------------===//
@@ -14,12 +15,12 @@
 #include "iree/compiler/Codegen/Common/Passes.h"
 #include "iree/compiler/Codegen/LLVMCPU/Passes.h"
 #include "iree/compiler/Codegen/LLVMGPU/Passes.h"
+#include "iree/compiler/Codegen/LLVMGPU/ROCDLPasses.h"
 #include "iree/compiler/Codegen/SPIRV/Passes.h"
 #include "iree/compiler/Codegen/VMVX/Passes.h"
 #include "iree/compiler/Codegen/WGSL/Passes.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 void registerCodegenPasses() {
   // Generated.
@@ -28,10 +29,10 @@ void registerCodegenPasses() {
   registerCodegenCommonGPUPasses();
   registerCodegenLLVMCPUPasses();
   registerCodegenLLVMGPUPasses();
+  registerCodegenROCDLPasses();
   registerCodegenSPIRVPasses();
   registerCodegenVMVXPasses();
   registerCodegenWGSLPasses();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

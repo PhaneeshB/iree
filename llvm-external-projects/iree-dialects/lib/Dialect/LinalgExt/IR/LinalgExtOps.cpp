@@ -10,7 +10,6 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -114,8 +113,8 @@ static bool isSmallerThan(ArrayRef<int64_t> sourceShape,
       llvm::zip(sourceShape, limitShape), [](std::tuple<int64_t, int64_t> it) {
         int64_t sourceExtent = std::get<0>(it);
         int64_t limit = std::get<1>(it);
-        return sourceExtent == ShapedType::kDynamic ||
-               limit == ShapedType::kDynamic || sourceExtent <= limit;
+        return ShapedType::isDynamic(sourceExtent) ||
+               ShapedType::isDynamic(limit) || sourceExtent <= limit;
       });
 }
 
@@ -142,7 +141,7 @@ LogicalResult ScatterOp::verify() {
         "expected indices to be of rank 2 of i32 element type");
   }
   auto indexDepth = getIndexDepth();
-  if (indexDepth == ShapedType::kDynamic) {
+  if (ShapedType::isDynamic(indexDepth)) {
     return op->emitOpError("expected index depth is static");
   }
 
@@ -612,7 +611,7 @@ LogicalResult FftOp::verify() {
   // After tiling, it could be dynamic shape. (Because
   // subview/subtensor does not inference the type correctly
   // on (1 << x)) cases).
-  if (length == ShapedType::kDynamic)
+  if (ShapedType::isDynamic(length))
     return success();
   if (length & (length - 1)) {
     return op->emitOpError("only powers of 2 are handled currently");
@@ -649,7 +648,7 @@ SmallVector<Range> FftOp::getIterationDomain(OpBuilder &builder) {
   Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
   for (auto en : llvm::enumerate(getOperandShape().drop_back())) {
     Value size;
-    if (en.value() == ShapedType::kDynamic) {
+    if (ShapedType::isDynamic(en.value())) {
       size = getDimValue(builder, loc, getReal(), en.index());
     } else {
       size = builder.create<arith::ConstantIndexOp>(loc, en.value());
@@ -823,7 +822,7 @@ FftOp::getTiledImplementation(OpBuilder &builder,
   for (auto out : getOutputs()) {
     tiledOperands.push_back(
         getSlice(builder, getLoc(), out, offsets, sizes, strides));
-    if (hasTensorSemantics()) {
+    if (hasPureTensorSemantics()) {
       resultTypes.push_back(tiledOperands.back().getType());
     }
   }
@@ -886,8 +885,8 @@ LogicalResult ScanOp::verify() {
   }
   if (llvm::any_of(llvm::zip(expectedAccumulatorShape, accumulatorShape),
                    [](std::tuple<int64_t, int64_t> s) {
-                     return std::get<0>(s) != ShapedType::kDynamic &&
-                            std::get<1>(s) != ShapedType::kDynamic &&
+                     return !ShapedType::isDynamic(std::get<0>(s)) &&
+                            !ShapedType::isDynamic(std::get<1>(s)) &&
                             std::get<0>(s) != std::get<1>(s);
                    })) {
     return op->emitOpError("incompatible input/accumulator shapes");
@@ -901,8 +900,8 @@ LogicalResult ScanOp::verify() {
   }
   if (llvm::any_of(llvm::zip(inputShapes, outputShapes),
                    [](std::tuple<int64_t, int64_t> s) {
-                     return std::get<0>(s) != ShapedType::kDynamic &&
-                            std::get<1>(s) != ShapedType::kDynamic &&
+                     return !ShapedType::isDynamic(std::get<0>(s)) &&
+                            !ShapedType::isDynamic(std::get<1>(s)) &&
                             std::get<0>(s) != std::get<1>(s);
                    })) {
     return op->emitOpError("incompatible input/output shapes");
@@ -1037,7 +1036,7 @@ ScanOp::getTiledImplementation(OpBuilder &builder,
   }
 
   SmallVector<Type, 4> resultTypes;
-  if (hasTensorSemantics()) {
+  if (hasPureTensorSemantics()) {
     resultTypes.push_back(tiledOperands[1].getType());
     resultTypes.push_back(tiledOperands[2].getType());
   }
@@ -1108,8 +1107,8 @@ LogicalResult ReverseOp::verify() {
   }
   if (llvm::any_of(llvm::zip(inputShapes, outputShapes),
                    [](std::tuple<int64_t, int64_t> s) {
-                     return std::get<0>(s) != ShapedType::kDynamic &&
-                            std::get<1>(s) != ShapedType::kDynamic &&
+                     return !ShapedType::isDynamic(std::get<0>(s)) &&
+                            !ShapedType::isDynamic(std::get<1>(s)) &&
                             std::get<0>(s) != std::get<1>(s);
                    })) {
     return op->emitOpError("incompatible input/output shapes");
@@ -1182,7 +1181,7 @@ ReverseOp::getTiledImplementation(OpBuilder &builder,
       getSlice(builder, loc, input(), offsets, sizes, strides));
 
   SmallVector<Type, 4> resultTypes;
-  if (hasTensorSemantics()) {
+  if (hasPureTensorSemantics()) {
     tiledOperands.emplace_back(
         getSlice(builder, loc, output(), mirrorOffsets, sizes, strides));
     resultTypes.push_back(tiledOperands[1].getType());
@@ -1462,7 +1461,7 @@ TopkOp::getTiledImplementation(OpBuilder &builder,
   tiledOperands.emplace_back(
       getSlice(builder, loc, getOutputs()[1], offsets, outputSizes, strides));
   SmallVector<Type, 2> resultTypes;
-  if (hasTensorSemantics()) {
+  if (hasPureTensorSemantics()) {
     resultTypes.push_back(tiledOperands[tiledOperands.size() - 2].getType());
     resultTypes.push_back(tiledOperands[tiledOperands.size() - 1].getType());
   }
@@ -1509,7 +1508,7 @@ areNotFullTiles(ArrayRef<int64_t> inputShape,
                 DenseMap<int64_t, OpFoldResult> const &dimAndTileMapping) {
   int64_t rank = inputShape.size();
   for (int64_t dim = 0; dim < rank; dim++) {
-    if (inputShape[dim] == ShapedType::kDynamic)
+    if (ShapedType::isDynamic(inputShape[dim]))
       continue;
     auto it = dimAndTileMapping.find(dim);
     if (it != dimAndTileMapping.end()) {
@@ -1656,9 +1655,9 @@ static LogicalResult commonVerifierPackAndUnPackOp(OpTy packOrUnPack) {
             if (!constTileSize) {
               // If specified tile size is dynamic, output shape should
               // be dynamic too.
-              return shape == ShapedType::kDynamic;
+              return ShapedType::isDynamic(shape);
             } else {
-              if (shape == ShapedType::kDynamic) {
+              if (ShapedType::isDynamic(shape)) {
                 // For the shape being dynamic when tile size is
                 // specified, return true. In canonical form a constant
                 // tile size should lead to constant shape of the tiled
@@ -2224,7 +2223,7 @@ WinogradInputTransformOp::getTiledImplementation(OpBuilder &builder,
                                       outputSizes, outputStrides));
 
   SmallVector<Type, 4> resultTypes;
-  if (hasTensorSemantics()) {
+  if (hasPureTensorSemantics()) {
     resultTypes.push_back(tiledOperands[1].getType());
   }
 
@@ -2396,7 +2395,7 @@ FailureOr<TilingResult> WinogradOutputTransformOp::getTiledImplementation(
                                       outputSizes, outputStrides));
 
   SmallVector<Type, 4> resultTypes;
-  if (hasTensorSemantics()) {
+  if (hasPureTensorSemantics()) {
     resultTypes.push_back(tiledOperands[1].getType());
   }
 
@@ -2479,8 +2478,13 @@ LogicalResult AttentionOp::verify() {
     return failure();
   ArrayRef<int64_t> queryShape = queryType.getShape();
   ArrayRef<int64_t> keyShape = keyType.getShape();
-  ArrayRef<int64_t> valueShape = valueType.getShape();
   ArrayRef<int64_t> outputShape = outputType.getShape();
+  SmallVector<int64_t> valueShape(valueType.getShape());
+  bool transposeV = getTransposeV();
+  if (transposeV) {
+    size_t lastIdx = valueShape.size() - 1;
+    std::swap(valueShape[lastIdx - 1], valueShape[lastIdx]);
+  }
   if (failed(verifyCompatibleShape(keyShape, valueShape)))
     return op->emitOpError("incompatible value shape");
   if (failed(verifyCompatibleShape(queryShape, outputShape)))
@@ -2583,7 +2587,7 @@ AttentionOp::getTiledImplementation(OpBuilder &builder,
                                       queryOutputStrides));
 
   SmallVector<Type> resultTypes;
-  if (hasTensorSemantics())
+  if (hasPureTensorSemantics())
     resultTypes.push_back(tiledOperands[3].getType());
 
   Operation *tiledOp =

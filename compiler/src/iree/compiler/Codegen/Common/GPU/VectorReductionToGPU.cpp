@@ -15,18 +15,18 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorDistribution.h"
+#include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #define DEBUG_TYPE "iree-codegen-vector-reduction-to-gpu"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
-void debugPrint(func::FuncOp funcOp, const char *message) {
+static void debugPrint(Operation *op, const char *message) {
   LLVM_DEBUG({
     llvm::dbgs() << "//--- " << message << " ---//\n";
-    funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+    op->print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
     llvm::dbgs() << "\n\n";
   });
 }
@@ -194,9 +194,9 @@ class VectorReductionToGPUPass
 public:
   explicit VectorReductionToGPUPass(
       bool expandSubgroupReduction,
-      std::function<int(func::FuncOp)> getWarpSize)
+      std::function<int(mlir::FunctionOpInterface)> getWarpSize)
       : expandSubgroupReduction(expandSubgroupReduction),
-        getWarpSize(getWarpSize) {}
+        getWarpSize(std::move(getWarpSize)) {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<scf::SCFDialect, memref::MemRefDialect, gpu::GPUDialect,
@@ -204,7 +204,7 @@ public:
   }
 
   void runOnOperation() override {
-    func::FuncOp funcOp = getOperation();
+    auto funcOp = getOperation();
     MLIRContext *ctx = &getContext();
 
     debugPrint(funcOp, "after step #0: before vector reduction to gpu");
@@ -277,13 +277,19 @@ public:
         return AffineMap::get(vecRank, 0,
                               builder.getAffineDimExpr(vecRank - 1));
       };
+
       RewritePatternSet patterns(ctx);
       vector::populatePropagateWarpVectorDistributionPatterns(
           patterns, distributionFn, simpleWarpShuffleFunction);
       vector::populateDistributeReduction(patterns, groupReductionFn);
-      vector::populateDistributeTransferWriteOpPatterns(patterns,
-                                                        distributionFn);
+
+      // We don't want to sink large transfer writes to a single lane -- pick a
+      // conservative value based on the group size.
+      unsigned maxWriteElementsToExtract = std::max(groupSize / 4, 1);
+      vector::populateDistributeTransferWriteOpPatterns(
+          patterns, distributionFn, maxWriteElementsToExtract);
       patterns.add<WarpOpBarrier>(patterns.getContext(), 3);
+      vector::ReductionOp::getCanonicalizationPatterns(patterns, ctx);
       (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
     }
 
@@ -307,18 +313,17 @@ public:
 
 private:
   bool expandSubgroupReduction;
-  std::function<int(func::FuncOp)> getWarpSize;
+  std::function<int(mlir::FunctionOpInterface)> getWarpSize;
 };
 
-} // anonymous namespace
+} // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createConvertVectorReductionToGPUPass(
     bool expandSubgroupReduction,
-    std::function<int(func::FuncOp)> getWarpSize) {
+    std::function<int(mlir::FunctionOpInterface)> getWarpSize) {
   return std::make_unique<VectorReductionToGPUPass>(expandSubgroupReduction,
                                                     getWarpSize);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

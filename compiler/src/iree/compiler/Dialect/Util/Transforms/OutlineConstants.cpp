@@ -11,17 +11,13 @@
 #include "iree/compiler/Dialect/Util/Transforms/PassDetail.h"
 #include "iree/compiler/Dialect/Util/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace Util {
+namespace mlir::iree_compiler::IREE::Util {
 
 // Returns true if |value| is worth outlining (large, etc).
 static bool isOutlinableValue(Attribute value) {
@@ -67,7 +63,6 @@ public:
   OutlineConstantsPass() = default;
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<mlir::func::FuncDialect>();
     registry.insert<mlir::arith::ArithDialect>();
     registry.insert<IREE::Util::UtilDialect>();
   }
@@ -96,7 +91,8 @@ public:
       // By the time we've outlined things here we are sure we want them
       // outlined even if the user runs an arbitrary number of passes between
       // now and when we may use that information (HAL constant pooling, etc).
-      globalOp->setAttr("noinline", moduleBuilder.getUnitAttr());
+      globalOp.setInliningPolicyAttr(
+          moduleBuilder.getAttr<IREE::Util::InlineNeverAttr>());
     }
 
     // Replace all of the constants with lookups for the new variables.
@@ -105,14 +101,12 @@ public:
       auto globalOp = pair.second;
       OpBuilder builder(moduleOp.getContext());
       builder.setInsertionPoint(originalOp);
-      auto loadOp = builder.create<IREE::Util::GlobalLoadOp>(
-          originalOp->getLoc(), globalOp.getType(),
-          SymbolRefAttr::get(globalOp));
+      auto loadOp = globalOp.createLoadOp(originalOp->getLoc(), builder);
 
       Value replacement;
       if (auto constantOp = dyn_cast<arith::ConstantOp>(originalOp)) {
         // Directly replace constant with global constant value.
-        replacement = loadOp.getResult();
+        replacement = loadOp.getLoadedGlobalValue();
       } else {
         assert(false && "unhandled constant op type");
       }
@@ -127,7 +121,4 @@ std::unique_ptr<OperationPass<mlir::ModuleOp>> createOutlineConstantsPass() {
   return std::make_unique<OutlineConstantsPass>();
 }
 
-} // namespace Util
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::Util

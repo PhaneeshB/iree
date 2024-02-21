@@ -7,6 +7,7 @@
 #ifndef IREE_DIALECT_HAL_OPS
 #define IREE_DIALECT_HAL_OPS
 
+include "iree/compiler/Dialect/HAL/IR/HALAttrs.td"
 include "iree/compiler/Dialect/HAL/IR/HALBase.td"
 include "iree/compiler/Dialect/HAL/IR/HALInterfaces.td"
 include "iree/compiler/Dialect/Util/IR/UtilAttrs.td"
@@ -36,24 +37,6 @@ def OpGroupExperimentalOps : OpDocGroup {
 }
 
 let opDocGroup = OpGroupExperimentalOps in {
-
-def HAL_ExSharedDeviceOp : HAL_PureOp<"ex.shared_device", [
-    DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
-  ]> {
-  let results = (outs
-    HAL_Device:$result
-  );
-
-  let assemblyFormat = "attr-dict `:` type($result)";
-
-  let skipDefaultBuilders = 1;
-  let builders = [
-    OpBuilder<(ins),
-    [{
-      $_state.addTypes({DeviceType::get($_builder.getContext())});
-    }]>,
-  ];
-}
 
 def HAL_ExFileFromMemoryOp : HAL_Op<"ex.file.from_memory", [
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
@@ -362,6 +345,13 @@ def HAL_DispatchExternOp : HAL_PureOp<"dispatch.extern", [
     E.g., in the above example, `-> %0` would tie the first argument to the
     result. In that case, there would be no separate block argument for the
     result.
+
+    Objects for multiple targets can be specified and the ones used are selected
+    based on their target and an optional condition region that returns true if
+    the variant is valid for use on the provided runtime `!hal.device`. If no
+    variants within an executable are valid then loading will fail at runtime.
+    If multiple variants are valid the first valid one found will be loaded and
+    used for execution.
   }];
 
   let arguments = (ins
@@ -371,7 +361,9 @@ def HAL_DispatchExternOp : HAL_PureOp<"dispatch.extern", [
     HAL_ShapeDynamicDims:$argument_dims,
     HAL_ShapeDynamicDims:$result_dims,
     HAL_PipelineLayoutAttr:$layout,
-    HAL_ExecutableObjectsAttr:$objects,
+    ArrayAttr:$targets,
+    HAL_OrdinalArrayAttr:$target_ordinals,
+    ArrayAttr:$target_objects,
     OptionalAttr<HAL_WorkgroupSizeAttr>:$workgroup_size,
     OptionalAttr<HAL_SubgroupSizeAttr>:$subgroup_size,
     OptionalAttr<IndexAttr>:$workgroup_local_memory,
@@ -383,7 +375,8 @@ def HAL_DispatchExternOp : HAL_PureOp<"dispatch.extern", [
   );
 
   let regions = (region
-    AnyRegion:$workgroup_count
+    AnyRegion:$workgroup_count,
+    VariadicRegion<AnyRegion>:$target_regions
   );
 
   let assemblyFormat = [{
@@ -397,7 +390,10 @@ def HAL_DispatchExternOp : HAL_PureOp<"dispatch.extern", [
     `count` `` custom<WorkgroupCountRegion>($workgroup_count)
     `layout` `(` $layout `)`
     (`bindings` `(` $bindings^ `)`)?
-    `objects` `(` $objects `)`
+    `objects` `(` `{` custom<TargetConditionObjects>($targets,
+                                                     $target_ordinals,
+                                                     $target_objects,
+                                                     $target_regions) `}` `)`
     attr-dict-with-keyword
   }];
 
@@ -408,6 +404,7 @@ def HAL_DispatchExternOp : HAL_PureOp<"dispatch.extern", [
       "TypeRange":$resultTypes, "ValueRange":$resultDims,
       "ValueRange":$arguments, "ValueRange":$argumentDims,
       "ArrayRef<int64_t>":$tiedOperands,
+      "IREE::HAL::ExecutableObjectsAttr":$targetObjects,
       CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>,
   ];
 
@@ -424,10 +421,14 @@ def HAL_DispatchExternOp : HAL_PureOp<"dispatch.extern", [
     unsigned mapArgOperandToOpOperand(unsigned i) { return i + getWorkload().size(); };
 
     ValueRange getOperandDynamicDims(unsigned idx) {
-      return IREE::Util::findVariadicDynamicDims(idx - getWorkload().size(), getArguments(), getArgumentDims());
+      return IREE::Util::findDynamicDimsInList(idx - getWorkload().size(), getArguments(), getArgumentDims());
     }
     ValueRange getResultDynamicDims(unsigned idx) {
-      return IREE::Util::findVariadicDynamicDims(idx, getResults(), getResultDims());
+      return IREE::Util::findDynamicDimsInList(idx, getResults(), getResultDims());
+    }
+
+    IREE::HAL::ExecutableObjectsAttr getObjectsAttr() {
+      return IREE::HAL::ExecutableObjectsAttr::get(getContext(), getTargets(), getTargetObjects());
     }
   }];
 
@@ -675,6 +676,80 @@ def OpGroupBufferViewOps : OpDocGroup {
 }
 
 let opDocGroup = OpGroupBufferViewOps in {
+
+def HAL_ElementTypeOp : HAL_PureOp<"element_type", [
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
+]> {
+  let summary = [{an iree_hal_element_type_t for the given MLIR type}];
+  let description = [{
+    Maps an MLIR type to a runtime `iree_hal_element_type_t` value for all types
+    that are convertable.
+  }];
+
+  let arguments = (ins
+    TypeAttr:$type
+  );
+  let results = (outs
+    HAL_ElementType:$result
+  );
+
+  let assemblyFormat = [{
+    `<` $type `>`
+    attr-dict
+    `:` type($result)
+  }];
+
+  let builders = [
+    OpBuilder<(ins "Type":$type), [{
+      build($_builder, $_state, $_builder.getI32Type(), TypeAttr::get(type));
+    }]>
+  ];
+
+  let extraClassDeclaration = [{
+    // Returns a stable identifier for the MLIR element type or nullopt if the
+    // type is unsupported in the ABI.
+    static std::optional<int32_t> getTypeValue(Type type);
+  }];
+
+  let hasVerifier = 1;
+}
+
+def HAL_EncodingTypeOp : HAL_PureOp<"encoding_type", [
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
+]> {
+  let summary = [{an iree_hal_encoding_type_t for the given MLIR encoding}];
+  let description = [{
+    Maps an MLIR encoding to a runtime `iree_hal_encoding_type_t` value for all
+    encodings that are convertable.
+  }];
+
+  let arguments = (ins
+    OptionalAttr<AnyAttr>:$encoding
+  );
+  let results = (outs
+    HAL_EncodingType:$result
+  );
+
+  let assemblyFormat = [{
+    `<` ($encoding^):( `` `dense_row_major`)? `>`
+    attr-dict
+    `:` type($result)
+  }];
+
+  let builders = [
+    OpBuilder<(ins "Attribute":$encoding), [{
+      build($_builder, $_state, $_builder.getI32Type(), encoding);
+    }]>
+  ];
+
+  let extraClassDeclaration = [{
+    // Returns a stable identifier for the MLIR encoding type or 0 (opaque) if
+    // the type is unsupported in the ABI.
+    static std::optional<int32_t> getTypeValue(Attribute attr);
+  }];
+
+  let hasVerifier = 1;
+}
 
 def HAL_BufferViewCreateOp : HAL_PureOp<"buffer_view.create", [
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
@@ -1464,33 +1539,6 @@ def HAL_DescriptorSetLayoutCreateOp :
   }];
 }
 
-def HAL_DescriptorSetLayoutLookupOp : HAL_PureOp<"descriptor_set_layout.lookup", [
-    DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
-  ]> {
-  let summary = [{descriptor set layout cache lookup pseudo-op}];
-  let description = [{
-    Used during conversion to provide a placeholder for a globally cached and
-    possibly lazy-initialized descriptor set layout.
-  }];
-
-  let arguments = (ins
-    HAL_Device:$device,
-    HAL_DescriptorSetLayoutFlagsAttr:$flags,
-    HAL_DescriptorSetLayoutBindingArrayAttr:$bindings
-  );
-  let results = (outs
-    HAL_DescriptorSetLayout:$result
-  );
-
-  let assemblyFormat = [{
-    `device` `(` $device `:` type($device) `)`
-    `flags` `(` $flags `)`
-    `bindings` `(` $bindings `)`
-    `:` type($result)
-    attr-dict-with-keyword
-  }];
-}
-
 } // OpGroupDescriptorSetLayoutOps
 
 //===----------------------------------------------------------------------===//
@@ -1559,7 +1607,7 @@ def HAL_ReturnOp : HAL_Op<"return", [Terminator]> {
 }
 
 def HAL_DeviceQueryOp :
-    HAL_PureOp<"device.query", [HAL_DeviceQuery]> {
+    HAL_PureOp<"device.query", []> {
   let summary = [{returns a runtime configuration parameter from the device}];
   let description = [{
     Queries a device configuration parameter with the given key.
@@ -1569,11 +1617,7 @@ def HAL_DeviceQueryOp :
 
     This is roughly equivalent to the `sysconf` linux syscall
     (https://man7.org/linux/man-pages/man3/sysconf.3.html) in that the exact
-    set of keys available and their interpretation is target-dependent. If there
-    is a HAL match attribute (`#hal.device.match.*`) or op
-    (`hal.device.match.*`) prefer to use that in order to get compile-time
-    propagation when the target is specified and elide the runtime query and
-    get compile-time verification when a runtime query is required.
+    set of keys available and their interpretation is target-dependent.
 
     Users of the op must check the `ok` result before using the value as what
     set of keys is available may change over time. If in doubt: don't use this.
@@ -1585,7 +1629,10 @@ def HAL_DeviceQueryOp :
 
     Well-known keys:
 
-    * hal.executable.format :: {some format}
+    * hal.device.id :: {some id pattern}
+      Returns 1 if the device identifier matches the given pattern string.
+
+    * hal.executable.format :: {some format pattern}
       Returns 1 if the given format is supported by the device loader.
 
     * hal.device :: concurrency
@@ -1616,6 +1663,14 @@ def HAL_DeviceQueryOp :
     `:` type($ok) `,` type($value)
     (`=` $default_value^)?
     attr-dict-with-keyword
+  }];
+
+  let extraClassDeclaration = [{
+    // Returns a true i1 if the given query returns a non-zero value.
+    // Returns false if the query fails or returns a zero value.
+    static Value createI1(Location loc, Value device,
+                          StringRef category, StringRef key,
+                          OpBuilder &builder);
   }];
 
   let hasVerifier = 1;
@@ -1846,6 +1901,57 @@ def HAL_DeviceQueueFlushOp : HAL_Op<"device.queue.flush"> {
 } // OpGroupDeviceOps
 
 //===----------------------------------------------------------------------===//
+// !hal.device management
+//===----------------------------------------------------------------------===//
+
+def OpGroupDeviceManagementOps : OpDocGroup {
+  let summary = "Device management ops";
+  let description = "Device availability and selection support.";
+}
+
+let opDocGroup = OpGroupDeviceManagementOps in {
+
+def HAL_DevicesCountOp : HAL_PureOp<"devices.count", [
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
+]> {
+  let summary = [{returns the number of available devices}];
+  let description = [{
+    Returns the total number of available devices registered at runtime.
+  }];
+
+  let results = (outs
+    Index:$result
+  );
+
+  let assemblyFormat = [{
+    attr-dict `:` type($result)
+  }];
+}
+
+def HAL_DevicesGetOp : HAL_PureOp<"devices.get", [
+  DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>,
+]> {
+  let summary = [{returns the device with the given index}];
+  let description = [{
+    Returns the device with the given index in the [0, hal.devices.count) range.
+    Devices may be lazily initialized upon first use.
+  }];
+
+  let arguments = (ins
+    Index:$index
+  );
+  let results = (outs
+    HAL_Device:$result
+  );
+
+  let assemblyFormat = [{
+    $index attr-dict `:` type($result)
+  }];
+}
+
+}  // OpGroupDeviceManagementOps
+
+//===----------------------------------------------------------------------===//
 // !hal.executable / iree_hal_executable_t
 //===----------------------------------------------------------------------===//
 
@@ -1930,6 +2036,7 @@ def HAL_ExecutableOp : HAL_Op<"executable", [
     SingleBlockImplicitTerminator<"IREE::HAL::ExecutableEndOp">,
     Symbol,
     SymbolTable,
+    Util_ObjectLike,
   ]> {
   let summary = [{target-specific executable module}];
   let description = [{
@@ -2113,6 +2220,11 @@ def HAL_ExecutableVariantOp : HAL_Op<"executable.variant", [
     // Returns a map of constant key attributes to ordinals across all constant
     // blocks inside the variant.
     DenseMap<Attribute, int> gatherConstantOrdinals();
+
+    // Creates the new `hal.executable.condition` op in this variant op and sets
+    // the insertion point of the provided builder to the beginning of the new
+    // region.
+    Value createConditionOp(OpBuilder &builder);
 
     // Returns an i1 indicating whether this variant should be selected.
     Value buildCondition(Value device, OpBuilder &builder);

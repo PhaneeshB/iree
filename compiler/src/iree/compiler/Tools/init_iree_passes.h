@@ -18,6 +18,7 @@
 #include "iree/compiler/Bindings/Native/Transforms/Passes.h"
 #include "iree/compiler/Bindings/TFLite/Transforms/Passes.h"
 #include "iree/compiler/ConstEval/Passes.h"
+#include "iree/compiler/Dialect/Flow/Conversion/MeshToFlow/MeshToFlow.h"
 #include "iree/compiler/Dialect/Flow/Transforms/Passes.h"
 #include "iree/compiler/Dialect/HAL/Transforms/Passes.h"
 #include "iree/compiler/Dialect/Stream/Transforms/Passes.h"
@@ -29,6 +30,7 @@
 #include "iree/compiler/InputConversion/Common/Passes.h"
 #include "iree/compiler/Modules/HAL/Inline/Transforms/Passes.h"
 #include "iree/compiler/Modules/HAL/Loader/Transforms/Passes.h"
+#include "iree/compiler/Modules/IO/Parameters/Transforms/Passes.h"
 #include "iree/compiler/Pipelines/Pipelines.h"
 #include "iree/compiler/Preprocessing/Passes.h"
 
@@ -37,8 +39,7 @@
 #include "iree/compiler/Dialect/VM/Conversion/VMToEmitC/ConvertVMToEmitC.h"
 #endif // IREE_HAVE_C_OUTPUT_FORMAT
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 // Registers IREE passes with the global registry.
 inline void registerAllIreePasses() {
@@ -51,10 +52,13 @@ inline void registerAllIreePasses() {
   registerCommonInputConversionPasses();
   ConstEval::registerConstEvalPasses();
   GlobalOptimization::registerGlobalOptimizationPipeline();
+  Preprocessing::registerPreprocessingPasses();
   IREE::Flow::registerFlowPasses();
+  IREE::Flow::registerMeshToFlowPasses();
   IREE::HAL::registerHALPasses();
   IREE::HAL::Inline::registerHALInlinePasses();
   IREE::HAL::Loader::registerHALLoaderPasses();
+  IREE::IO::Parameters::registerParametersPasses();
   IREE::LinalgExt::registerPasses();
   IREE::Stream::registerStreamPasses();
   IREE::Util::registerTransformPasses();
@@ -62,7 +66,6 @@ inline void registerAllIreePasses() {
   IREE::VM::registerVMAnalysisTestPasses();
   IREE::VM::registerVMTestPasses();
   IREE::VMVX::registerVMVXPasses();
-  IREE::registerPreprocessingPasses();
   registerIREEVMTransformPassPipeline();
 
   // We have some dangling passes that don't use explicit
@@ -74,7 +77,6 @@ inline void registerAllIreePasses() {
 #endif // IREE_HAVE_C_OUTPUT_FORMAT
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler
 
 #endif // IREE_COMPILER_TOOLS_INIT_IREE_PASSES_H_

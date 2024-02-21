@@ -26,8 +26,7 @@
 // Pass to pipeline copy to shared memory for matmul op.
 //====---------------------------------------------------------------------===//
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 static const StringLiteral kPipeliningLoopMarker = "__pipelining_K_loop__";
 static const StringLiteral kPipeliningFirstStage = "__pipelining_first_stage__";
@@ -712,11 +711,10 @@ pipelineSharedMemoryCopy(RewriterBase &rewriter, scf::ForOp forOp,
 /// true  : Peel epilogue (no additional checks required)
 /// false : Try and use unpeeled epilogue (check if predication is supported
 /// is avialable)
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createGPUPipeliningPass(bool epiloguePeeling, unsigned depth,
                         PipeliningSchedulingStrategy schedule) {
   return std::make_unique<GPUPipeliningPass>(epiloguePeeling, depth, schedule);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

@@ -9,14 +9,11 @@
 
 #include "iree/compiler/Codegen/TransformStrategies/GPU/AbstractGemmLikeStrategy.h"
 #include "llvm/ADT/StringRef.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/IR/BuiltinOps.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace gpu {
+namespace mlir::iree_compiler::gpu {
 
 struct GPUModel;
 
@@ -87,7 +84,7 @@ Value buildDistributeVectors(ImplicitLocOpBuilder &b, Value variantH,
 
 /// Take care of the last common steps in a GPU strategy (i.e. vectorize,
 /// bufferize, maps to blocks and threads and distribute vectors).
-/// Return the handles to the updated variant and the func::FuncOp ops under
+/// Return the handles to the updated variant and the function ops under
 /// the variant op.
 // TODO: abstract away AbstractReductionStrategy, this is supposed to be
 // retargetable.
@@ -190,8 +187,6 @@ void buildPipelineSharedMemoryCopies(ImplicitLocOpBuilder &b, Value funcH,
 
 Value buildBufferize(ImplicitLocOpBuilder &b, Value variantH);
 
-} // namespace gpu
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::gpu
 
 #endif // IREE_COMPILER_CODEGEN_TRANSFORM_DIALECT_STRATEGIES_GPU_COMMON_H_

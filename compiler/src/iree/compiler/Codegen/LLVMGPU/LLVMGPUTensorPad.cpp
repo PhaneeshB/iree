@@ -11,15 +11,13 @@
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Interfaces/ValueBoundsOpInterface.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #define DEBUG_TYPE "iree-llvmgpu-tensor-pad"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -223,9 +221,9 @@ struct LLVMGPUTensorPadPass
 };
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> createLLVMGPUTensorPadPass() {
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createLLVMGPUTensorPadPass() {
   return std::make_unique<LLVMGPUTensorPadPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

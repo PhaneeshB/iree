@@ -83,3 +83,30 @@ func.func @mmt4d_bf16xbf16xf32() {
   }
   return
 }
+
+// -----
+
+// CHECK-LABEL: func.func @outerproduct_bf16_preserved
+func.func @outerproduct_bf16_preserved(%arg0 : vector<1xbf16>, %arg1 : vector<1xbf16>, %arg2 : vector<1x1xbf16>) -> vector<1x1xbf16> {
+  // CHECK: vector.outerproduct %[[ARG0:.+]], %[[ARG1:.+]], %[[ARG2:.+]] {kind = #vector.kind<add>} : vector<1xbf16>, vector<1xbf16>
+  %0 = vector.outerproduct %arg0, %arg1, %arg2 {kind = #vector.kind<add>} : vector<1xbf16>, vector<1xbf16>
+  return %0 : vector<1x1xbf16>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @load_trunc_f32_bf16
+func.func @load_trunc_f32_bf16(%arg0 : memref<32xf32>, %arg1 : memref<32xbf16>) {
+  // CHECK-SAME:  %[[ARG0:.+]]: memref<32xf32>
+  // CHECK-SAME:  %[[ARG1:.+]]: memref<32xi16>
+  // CHECK: %[[C0:.+]] = arith.constant 0 : index
+  // CHECK: %[[LOAD:.+]] = vector.load %[[ARG0]][%[[C0]]] : memref<32xf32>, vector<4xf32>
+  // CHECK: %[[TRUNC:.+]] = arith.truncf %[[LOAD]] : vector<4xf32> to vector<4xbf16>
+  // CHECK: %[[CAST:.+]] = arith.bitcast %[[TRUNC]] : vector<4xbf16> to vector<4xi16>
+  // CHECK: vector.store %[[CAST]], %[[ARG1]][%[[C0]]] : memref<32xi16>, vector<4xi16>
+  %c0 = arith.constant 0 : index
+  %load = vector.load %arg0[%c0] : memref<32xf32>, vector<4xf32>
+  %trunc = arith.truncf %load : vector<4xf32> to vector<4xbf16>
+  vector.store %trunc, %arg1[%c0] : memref<32xbf16>, vector<4xbf16>
+  return
+}

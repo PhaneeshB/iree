@@ -16,6 +16,7 @@
 #include "mlir/Dialect/MemRef/Transforms/Transforms.h"
 #include "mlir/Dialect/SCF/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/Utils/Utils.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/DenseSet.h"
@@ -50,10 +51,10 @@ static LogicalResult tileWinogradInputTransformOp(
     WinogradInputTransformOp inputOp, RewriterBase &rewriter,
     WinogradInputTransformOp &tiledWinogradInputTransformOp) {
   Location loc = inputOp.getLoc();
-  auto funcOp = inputOp->getParentOfType<func::FuncOp>();
+  auto funcOp = inputOp->getParentOfType<mlir::FunctionOpInterface>();
   if (!funcOp) {
     return rewriter.notifyMatchFailure(inputOp,
-                                       "Could not find parent of type funcOp");
+                                       "Could not find parent function");
   }
 
   const int64_t inputTileSize = inputOp.getInputTileSize();
@@ -81,7 +82,7 @@ static LogicalResult tileWinogradInputTransformOp(
                                                 imageDims.end());
   SmallVector<int64_t> inputTileSquare(imageDims.size(), inputTileSize);
 
-  rewriter.setInsertionPointToStart(&funcOp.getBody().front());
+  rewriter.setInsertionPointToStart(&funcOp.getFunctionBody().front());
 
   SmallVector<Value> lbs, ubs, steps;
   computeLoopParams(lbs, ubs, steps, output, numImageDims, loc, rewriter);
@@ -182,12 +183,13 @@ static LogicalResult decomposeTiledWinogradInputTransformOp(
     WinogradInputTransformOp tiledWinogradInputTransformOp,
     RewriterBase &rewriter) {
   Location loc = tiledWinogradInputTransformOp.getLoc();
-  auto funcOp = tiledWinogradInputTransformOp->getParentOfType<func::FuncOp>();
+  auto funcOp = tiledWinogradInputTransformOp
+                    ->getParentOfType<mlir::FunctionOpInterface>();
   if (!funcOp) {
     return rewriter.notifyMatchFailure(tiledWinogradInputTransformOp,
-                                       "Could not find parent of type funcOp");
+                                       "Could not find parent function");
   }
-  rewriter.setInsertionPointToStart(&funcOp.getBody().front());
+  rewriter.setInsertionPointToStart(&funcOp.getFunctionBody().front());
 
   Value dynamicSlice = tiledWinogradInputTransformOp.input();
   Value outputSlice = tiledWinogradInputTransformOp.output();
@@ -210,10 +212,20 @@ static LogicalResult decomposeTiledWinogradInputTransformOp(
       loc, rewriter.getZeroAttr(elementType));
   Value scratch =
       rewriter.create<tensor::EmptyOp>(loc, inputTileSquare, elementType);
+
   const float *BT{nullptr};
   const float *B{nullptr};
-  B = IREE::LinalgExt::Winograd::B_6x6_3x3;
-  BT = IREE::LinalgExt::Winograd::BT_6x6_3x3;
+  const int64_t outputTileSize =
+      tiledWinogradInputTransformOp.getOutputTileSize();
+  switch (outputTileSize) {
+  case 4:
+    B = IREE::LinalgExt::Winograd::B_4x4_3x3;
+    BT = IREE::LinalgExt::Winograd::BT_4x4_3x3;
+    break;
+  default:
+    B = IREE::LinalgExt::Winograd::B_6x6_3x3;
+    BT = IREE::LinalgExt::Winograd::BT_6x6_3x3;
+  }
   Value BTV = IREE::LinalgExt::createValueFrom2DConstant(
       BT, inputTileSize, inputTileSize, loc, rewriter);
   Value BV = IREE::LinalgExt::createValueFrom2DConstant(
@@ -303,10 +315,10 @@ static LogicalResult tileWinogradOutputTransformOp(
     WinogradOutputTransformOp outputOp, RewriterBase &rewriter,
     WinogradOutputTransformOp &tiledWinogradOutputTransformOp) {
   Location loc = outputOp.getLoc();
-  auto funcOp = outputOp->getParentOfType<func::FuncOp>();
+  auto funcOp = outputOp->getParentOfType<mlir::FunctionOpInterface>();
   if (!funcOp) {
     return rewriter.notifyMatchFailure(outputOp,
-                                       "Could not find parent of type funcOp");
+                                       "Could not find parent function");
   }
 
   const int64_t inputTileSize = outputOp.getInputTileSize();
@@ -329,7 +341,7 @@ static LogicalResult tileWinogradOutputTransformOp(
                                                 imageDims.end());
   SmallVector<int64_t> inputTileSquare(imageDims.size(), inputTileSize);
 
-  rewriter.setInsertionPointToStart(&funcOp.getBody().front());
+  rewriter.setInsertionPointToStart(&funcOp.getFunctionBody().front());
 
   SmallVector<Value> lbs, ubs, steps;
   computeLoopParams(lbs, ubs, steps, input, numImageDims, loc, rewriter);
@@ -421,12 +433,13 @@ static LogicalResult decomposeTiledWinogradOutputTransformOp(
     WinogradOutputTransformOp tiledWinogradOutputTransformOp,
     RewriterBase &rewriter) {
   Location loc = tiledWinogradOutputTransformOp.getLoc();
-  auto funcOp = tiledWinogradOutputTransformOp->getParentOfType<func::FuncOp>();
+  auto funcOp = tiledWinogradOutputTransformOp
+                    ->getParentOfType<mlir::FunctionOpInterface>();
   if (!funcOp) {
     return rewriter.notifyMatchFailure(tiledWinogradOutputTransformOp,
-                                       "Could not find parent of type funcOp");
+                                       "Could not find parent function");
   }
-  rewriter.setInsertionPointToStart(&funcOp.getBody().front());
+  rewriter.setInsertionPointToStart(&funcOp.getFunctionBody().front());
   Value inputSlice = tiledWinogradOutputTransformOp.input();
   Value outputSlice = tiledWinogradOutputTransformOp.output();
   assert(tiledWinogradOutputTransformOp.getInputOperandRank() == 2 &&
@@ -435,14 +448,23 @@ static LogicalResult decomposeTiledWinogradOutputTransformOp(
          "output operand expected to have rank-2");
   ShapedType outputType = tiledWinogradOutputTransformOp.getOutputOperandType();
   Type elementType = outputType.getElementType();
+
   const float *AT{nullptr};
   const float *A{nullptr};
-  A = IREE::LinalgExt::Winograd::A_6x6_3x3;
-  AT = IREE::LinalgExt::Winograd::AT_6x6_3x3;
   const int64_t inputTileSize =
       tiledWinogradOutputTransformOp.getInputTileSize();
   const int64_t outputTileSize =
       tiledWinogradOutputTransformOp.getOutputTileSize();
+  switch (outputTileSize) {
+  case 4:
+    A = IREE::LinalgExt::Winograd::A_4x4_3x3;
+    AT = IREE::LinalgExt::Winograd::AT_4x4_3x3;
+    break;
+  default:
+    A = IREE::LinalgExt::Winograd::A_6x6_3x3;
+    AT = IREE::LinalgExt::Winograd::AT_6x6_3x3;
+  }
+
   /// The two values below are the transpose(A) [ATV]
   /// and A [AV] constant matrices that convert the output
   /// tile from the Winograd domain to the original domain.
@@ -521,7 +543,8 @@ struct TileAndDecomposeWinogradTransformPass
 };
 } // namespace
 
-LogicalResult reifyWinogradTransform(func::FuncOp funcOp, bool onlyTile) {
+LogicalResult reifyWinogradTransform(mlir::FunctionOpInterface funcOp,
+                                     bool onlyTile) {
   IRRewriter rewriter(funcOp.getContext());
   LogicalResult resultOfTransformations = success();
   funcOp.walk([&](WinogradInputTransformOp inputOp) {
@@ -544,7 +567,7 @@ void TileAndDecomposeWinogradTransformPass::runOnOperation() {
     return signalPassFailure();
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createTileAndDecomposeWinogradTransformPass() {
   return std::make_unique<TileAndDecomposeWinogradTransformPass>();
 }

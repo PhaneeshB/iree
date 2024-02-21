@@ -32,7 +32,7 @@ iree_cc_library(
     MLIRMemRefDialect
     MLIRPass
     MLIRTransforms
-    iree::compiler::Codegen::Dialect::IREECodegenDialect
+    iree::compiler::Codegen::Dialect::Codegen::IR::IREECodegenDialect
     iree::compiler::Dialect::HAL::IR
     iree::compiler::Utils
   PUBLIC
@@ -55,6 +55,7 @@ iree_cc_library(
     "LLVMCPUAssignConstantOrdinals.cpp"
     "LLVMCPUAssignImportOrdinals.cpp"
     "LLVMCPUCheckIRBeforeLLVMConversion.cpp"
+    "LLVMCPUDropVectorUnitDims.cpp"
     "LLVMCPUEmitVectorizationRemarks.cpp"
     "LLVMCPULinkExecutables.cpp"
     "LLVMCPULowerExecutableTarget.cpp"
@@ -63,11 +64,13 @@ iree_cc_library(
     "LLVMCPUSelectLoweringStrategy.cpp"
     "LLVMCPUSplitReduction.cpp"
     "LLVMCPUSynchronizeSymbolVisibility.cpp"
-    "LLVMCPUTensorPad.cpp"
     "LLVMCPUTile.cpp"
     "LLVMCPUTileAndFuse.cpp"
     "LLVMCPUUnfuseFMAOps.cpp"
-    "LLVMCPUVectorLowering.cpp"
+    "LLVMCPUVectorShapeCastLowering.cpp"
+    "LLVMCPUVectorTransferLowering.cpp"
+    "LLVMCPUVectorTransposeLowering.cpp"
+    "LLVMCPUVirtualVectorLowering.cpp"
     "Passes.cpp"
     "TargetMLTransformInfo.cpp"
     "Utils.cpp"
@@ -89,10 +92,14 @@ iree_cc_library(
     MLIRAffineUtils
     MLIRAnalysis
     MLIRArithDialect
+    MLIRArithToArmSME
     MLIRArithToLLVM
     MLIRArithTransforms
     MLIRArmNeon2dToIntr
     MLIRArmNeonDialect
+    MLIRArmSMEToLLVM
+    MLIRArmSMEToLLVMIRTranslation
+    MLIRArmSMEToSCF
     MLIRArmSMETransforms
     MLIRBufferizationDialect
     MLIRComplexToLLVM
@@ -101,6 +108,7 @@ iree_cc_library(
     MLIRFuncDialect
     MLIRFuncToLLVM
     MLIRFuncTransforms
+    MLIRFunctionInterfaces
     MLIRIR
     MLIRLLVMCommonConversion
     MLIRLLVMDialect
@@ -129,13 +137,15 @@ iree_cc_library(
     MLIRTransforms
     MLIRValueBoundsOpInterface
     MLIRVectorDialect
+    MLIRVectorToArmSME
     MLIRVectorToLLVM
     MLIRVectorToSCF
     MLIRVectorTransforms
+    MLIRX86VectorTransforms
     iree::compiler::Codegen::Common
     iree::compiler::Codegen::Common::CPU::CommonCPUPasses
     iree::compiler::Codegen::Common::TransformDialectInterpreterPass
-    iree::compiler::Codegen::Dialect::IREECodegenDialect
+    iree::compiler::Codegen::Dialect::Codegen::IR::IREECodegenDialect
     iree::compiler::Codegen::Interfaces::PartitionableLoopsInterface
     iree::compiler::Codegen::TransformStrategies::CPU
     iree::compiler::Codegen::Transforms

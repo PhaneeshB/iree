@@ -13,11 +13,11 @@
 #include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtDialect.h"
 #include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/Dialect/Tosa/Transforms/Passes.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "tosa-iree/InputConversion/PassDetail.h"
 #include "tosa-iree/InputConversion/Passes.h"
@@ -25,8 +25,7 @@
 using namespace mlir;
 using namespace mlir::tosa;
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 // Converts tosa.scatter to the iree_linalg_ext.scatter operation. As the
 // LinalgExt version is not batched therefore we materialize the batch index
@@ -123,8 +122,8 @@ public:
 
       int64_t batch = valueTy.getShape().front();
       int64_t rows = collapseShape.front();
-      bool batchDyn = batch == ShapedType::kDynamic;
-      bool rowsDyn = rows == ShapedType::kDynamic;
+      bool batchDyn = ShapedType::isDynamic(batch);
+      bool rowsDyn = ShapedType::isDynamic(rows);
       collapseShape[0] =
           (batchDyn || rowsDyn) ? ShapedType::kDynamic : batch * rows;
 
@@ -170,9 +169,9 @@ void populateTosaToLinalgExtPatterns(RewritePatternSet *patterns) {
   patterns->add<ScatterConversion>(patterns->getContext());
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> createTosaToLinalgExt() {
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createTosaToLinalgExt() {
   return std::make_unique<TosaToLinalgExtPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

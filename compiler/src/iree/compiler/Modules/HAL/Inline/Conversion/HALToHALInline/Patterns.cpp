@@ -13,13 +13,42 @@
 #include "iree/compiler/Modules/HAL/Inline/IR/HALInlineDialect.h"
 #include "iree/compiler/Modules/HAL/Inline/IR/HALInlineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
+
+struct ElementTypeOpConversion
+    : public OpConversionPattern<IREE::HAL::ElementTypeOp> {
+  using OpConversionPattern<IREE::HAL::ElementTypeOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(IREE::HAL::ElementTypeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto value =
+        IREE::HAL::ElementTypeOp::getTypeValue(op.getTypeAttr().getValue());
+    if (!value.has_value())
+      return rewriter.notifyMatchFailure(op.getLoc(),
+                                         "unsupported element type");
+    rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(op, value.value(), 32);
+    return success();
+  }
+};
+
+struct EncodingTypeOpConversion
+    : public OpConversionPattern<IREE::HAL::EncodingTypeOp> {
+  using OpConversionPattern<IREE::HAL::EncodingTypeOp>::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(IREE::HAL::EncodingTypeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto value = IREE::HAL::EncodingTypeOp::getTypeValue(op.getEncodingAttr());
+    if (!value.has_value())
+      return rewriter.notifyMatchFailure(op.getLoc(),
+                                         "unsupported encoding type");
+    rewriter.replaceOpWithNewOp<arith::ConstantIntOp>(op, value.value(), 32);
+    return success();
+  }
+};
 
 struct BufferSubspanOpPattern
     : public OpConversionPattern<IREE::HAL::BufferSubspanOp> {
@@ -219,6 +248,9 @@ void populateHALToHALInlinePatterns(MLIRContext *context,
   patterns.insert<BufferLoadOpPattern>(typeConverter, context);
   patterns.insert<BufferStoreOpPattern>(typeConverter, context);
 
+  patterns.insert<ElementTypeOpConversion>(context);
+  patterns.insert<EncodingTypeOpConversion>(context);
+
   patterns.insert<BufferViewCreateOpPattern>(typeConverter, context);
   patterns.insert<BufferViewAssertOpPattern>(typeConverter, context);
   patterns.insert<BufferViewBufferOpPattern>(typeConverter, context);
@@ -229,5 +261,4 @@ void populateHALToHALInlinePatterns(MLIRContext *context,
   patterns.insert<BufferViewTraceOpPattern>(typeConverter, context);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

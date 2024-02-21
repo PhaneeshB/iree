@@ -10,8 +10,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -20,11 +19,6 @@ struct LLVMCPUAssignImportOrdinalsPass
   LLVMCPUAssignImportOrdinalsPass() = default;
   void runOnOperation() override {
     auto variantOp = getOperation();
-
-    // Ignore non-LLVMCPU variants.
-    // TODO(benvanik): a way to nest this in the pipeline via dynamic passes.
-    if (variantOp.getTarget().getBackend().getValue() != "llvm-cpu")
-      return;
 
     auto *context = variantOp.getContext();
     auto unitAttr = UnitAttr::get(context);
@@ -85,5 +79,4 @@ createLLVMCPUAssignImportOrdinalsPass() {
   return std::make_unique<LLVMCPUAssignImportOrdinalsPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

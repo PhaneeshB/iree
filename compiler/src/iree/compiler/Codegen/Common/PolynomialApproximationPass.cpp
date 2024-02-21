@@ -10,8 +10,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 /// Command line to use native hardware operations instead of polynomial
 /// approximation.
@@ -29,12 +28,12 @@ class PolynomialApproximationPass
   void runOnOperation() override {
     RewritePatternSet mathPatterns(&getContext());
     populateExpandTanPattern(mathPatterns);
-    populateExpandExp2FPattern(mathPatterns);
     populateExpandPowFPattern(mathPatterns);
 
     if (clNativeMathPrecision) {
       mathPatterns.add<math::ErfPolynomialApproximation>(&getContext());
     } else {
+      populateExpandExp2FPattern(mathPatterns);
       populateMathPolynomialApproximationPatterns(mathPatterns);
       populateExpandRoundEvenPattern(mathPatterns);
     }
@@ -51,5 +50,4 @@ std::unique_ptr<OperationPass<>> createPolynomialApproximationPass() {
   return std::make_unique<PolynomialApproximationPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

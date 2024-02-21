@@ -11,7 +11,6 @@
 #include "iree/compiler/Dialect/HAL/IR/HALTypes.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Affine/Utils.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -20,8 +19,7 @@
 
 #define DEBUG_TYPE "iree-spirv-erase-storage-buffer-static-shape"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -100,7 +98,7 @@ rewriteStorageBufferSubspanOp(RewriterBase &rewriter,
 } // namespace
 
 void EraseStorageBufferStaticShapePass::runOnOperation() {
-  func::FuncOp funcOp = getOperation();
+  auto funcOp = getOperation();
 
   // Collect all storage buffer subspan ops with 1-D static shapes. We only need
   // to handle such cases here--high-D static shapes are expected to be flattend
@@ -129,10 +127,9 @@ void EraseStorageBufferStaticShapePass::runOnOperation() {
   }
 }
 
-std::unique_ptr<mlir::OperationPass<func::FuncOp>>
+std::unique_ptr<mlir::InterfacePass<mlir::FunctionOpInterface>>
 createSPIRVEraseStorageBufferStaticShapePass() {
   return std::make_unique<EraseStorageBufferStaticShapePass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

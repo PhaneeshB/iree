@@ -20,10 +20,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Support/LogicalResult.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace VM {
+namespace mlir::iree_compiler::IREE::VM {
 
 //===----------------------------------------------------------------------===//
 // Utilities
@@ -99,7 +96,7 @@ struct InlineConstGlobalInitializer : public OpRewritePattern<InitializerOp> {
       auto globalOp =
           SymbolTable::lookupNearestSymbolFrom<IREE::Util::GlobalOpInterface>(
               op, globalRefAttr);
-      rewriter.updateRootInPlace(
+      rewriter.modifyOpInPlace(
           globalOp, [&]() { globalOp.setGlobalInitialValue(valueAttr); });
       deadOps.push_back(op);
     });
@@ -205,8 +202,9 @@ struct PropagateGlobalLoadAddress : public OpRewritePattern<INDIRECT> {
                                 PatternRewriter &rewriter) const override {
     if (auto addressOp = dyn_cast_or_null<IREE::Util::GlobalAddressOpInterface>(
             op.getGlobal().getDefiningOp())) {
-      rewriter.replaceOpWithNewOp<DIRECT>(op, op.getValue().getType(),
-                                          addressOp.getGlobalAttr());
+      rewriter.replaceOpWithNewOp<DIRECT>(
+          op, op.getValue().getType(), addressOp.getGlobalAttr(),
+          addressOp.isGlobalImmutable() ? rewriter.getUnitAttr() : UnitAttr{});
       return success();
     }
     return failure();
@@ -3358,7 +3356,4 @@ void CondBreakOp::getCanonicalizationPatterns(RewritePatternSet &results,
                  SimplifyConstCondBreakPred>(context);
 }
 
-} // namespace VM
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::VM

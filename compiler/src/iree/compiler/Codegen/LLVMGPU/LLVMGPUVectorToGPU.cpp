@@ -19,10 +19,9 @@
 #include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
-static void swizzleSharedMemory(func::FuncOp funcOp) {
+static void swizzleSharedMemory(mlir::FunctionOpInterface funcOp) {
   SmallVector<memref::AllocOp> shmAllocOps;
   funcOp->walk([&](memref::AllocOp allocOp) {
     // Only apply it to shared memory of input operands.
@@ -103,10 +102,9 @@ private:
 };
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createLLVMGPUVectorToGPU(GPUTensorCoreType tensorCoreType) {
   return std::make_unique<LLVMGPUVectorToGPUPass>(tensorCoreType);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

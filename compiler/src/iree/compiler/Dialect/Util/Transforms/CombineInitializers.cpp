@@ -14,7 +14,6 @@
 #include "iree/compiler/Dialect/Util/Transforms/Passes.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -24,10 +23,7 @@
 
 #define DEBUG_TYPE "iree-util-combine-initializers"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace Util {
+namespace mlir::iree_compiler::IREE::Util {
 namespace {
 
 class CombineInitializersPass
@@ -73,7 +69,7 @@ public:
       builder.setInsertionPointToEnd(&newOp.back());
       initializerOp.erase();
     }
-    builder.create<IREE::Util::InitializerReturnOp>(fusedLoc);
+    builder.create<IREE::Util::ReturnOp>(fusedLoc);
   }
 };
 
@@ -83,7 +79,4 @@ std::unique_ptr<OperationPass<mlir::ModuleOp>> createCombineInitializersPass() {
   return std::make_unique<CombineInitializersPass>();
 }
 
-} // namespace Util
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::Util

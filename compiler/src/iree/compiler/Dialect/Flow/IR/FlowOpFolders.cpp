@@ -18,7 +18,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Attributes.h"
@@ -32,10 +31,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace Flow {
+namespace mlir::iree_compiler::IREE::Flow {
 
 //===----------------------------------------------------------------------===//
 // Folding utilities
@@ -348,7 +344,7 @@ struct ElideRedundantOperandsOfWorkgroupCountFromSliceOp
           rewriter.getIndexAttr(
               oldOrdinalPosToNewOrdinalPos.lookup(oldOrdinalPos)));
     }
-    rewriter.updateRootInPlace(op, []() {});
+    rewriter.modifyOpInPlace(op, []() {});
     return success();
   }
 };
@@ -462,7 +458,7 @@ static bool updateTensorOpDims(RewriterBase &rewriter, Operation *op,
   auto oldValues = llvm::to_vector(oldValueRange);
   for (unsigned i = 0; i < dynamicDims.size(); ++i) {
     if (oldValues[i] != dynamicDims[i]) {
-      rewriter.updateRootInPlace(
+      rewriter.modifyOpInPlace(
           op, [&]() { mutableDimValues.slice(i, 1).assign(dynamicDims[i]); });
       anyChanged = true;
     }
@@ -639,8 +635,23 @@ struct FoldCastOpIntoDispatchStoreOp
   LogicalResult matchAndRewrite(DispatchTensorStoreOp storeOp,
                                 PatternRewriter &rewriter) const override {
     auto parentOp = storeOp.getValue().getDefiningOp<tensor::CastOp>();
-    if (!parentOp || !tensor::canFoldIntoConsumerOp(parentOp))
+    if (!parentOp || !tensor::canFoldIntoConsumerOp(parentOp)) {
       return failure();
+    }
+
+    // Only fold a cast when the (rank-reduced) type is consistent with the
+    // static sizes.
+    auto sourceTensorType =
+        dyn_cast<RankedTensorType>(parentOp.getSource().getType());
+    if (!sourceTensorType) {
+      return failure();
+    }
+    auto inferredType = RankedTensorType::get(
+        storeOp.getStaticSizes(), sourceTensorType.getElementType());
+    if (isRankReducedType(inferredType, sourceTensorType) !=
+        SliceVerificationResult::Success) {
+      return failure();
+    }
 
     rewriter.replaceOpWithNewOp<DispatchTensorStoreOp>(
         storeOp, parentOp.getSource(), storeOp.getTarget(),
@@ -700,8 +711,8 @@ struct DeduplicateDispatchEntryRefs final
     auto newAttr = deduplicateArrayElements(originalAttr);
     if (newAttr == originalAttr)
       return failure();
-    rewriter.updateRootInPlace(
-        dispatchOp, [&]() { dispatchOp.setEntryPointsAttr(newAttr); });
+    rewriter.modifyOpInPlace(dispatchOp,
+                             [&]() { dispatchOp.setEntryPointsAttr(newAttr); });
     return success();
   }
 };
@@ -1334,7 +1345,4 @@ void ChannelSplitOp::getCanonicalizationPatterns(RewritePatternSet &results,
   results.insert<ElideUnusedOp<ChannelSplitOp>>(context);
 }
 
-} // namespace Flow
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::Flow

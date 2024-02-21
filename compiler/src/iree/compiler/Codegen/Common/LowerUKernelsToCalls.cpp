@@ -12,8 +12,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 struct LowerUKernelOpsToCallsPass
@@ -28,14 +27,15 @@ struct LowerUKernelOpsToCallsPass
 void LowerUKernelOpsToCallsPass::runOnOperation() {
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
-  llvm::MapVector<IREE::Codegen::UKernelOpInterface, func::CallOp> toReplace;
+  llvm::MapVector<IREE::Codegen::UKernelOpInterface, mlir::CallOpInterface>
+      toReplace;
   Operation *errorOp = nullptr;
   IRRewriter rewriter(context);
   WalkResult result = getOperation().walk(
       [&](IREE::Codegen::UKernelOpInterface microKernelOp) -> WalkResult {
         OpBuilder::InsertionGuard g(rewriter);
         rewriter.setInsertionPoint(microKernelOp);
-        FailureOr<func::CallOp> callOp =
+        FailureOr<mlir::CallOpInterface> callOp =
             microKernelOp.lowerToFunctionCall(rewriter);
         if (failed(callOp)) {
           errorOp = microKernelOp;
@@ -58,5 +58,4 @@ std::unique_ptr<OperationPass<ModuleOp>> createLowerUKernelOpsToCallsPass() {
   return std::make_unique<LowerUKernelOpsToCallsPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

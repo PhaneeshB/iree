@@ -30,10 +30,7 @@
 
 #define DEBUG_TYPE "iree-flow-form-dispatch-workgroups"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace Flow {
+namespace mlir::iree_compiler::IREE::Flow {
 
 //===----------------------------------------------------------------------===//
 // Dispatch workgroups formation
@@ -43,7 +40,7 @@ namespace Flow {
 /// DispatchWorkgroupsOp
 static FailureOr<SmallVector<Flow::DispatchWorkgroupsOp>>
 createDispatchWorkgroups(mlir::TensorDimTrackingRewriter &rewriter,
-                         FunctionOpInterface funcOp,
+                         mlir::FunctionOpInterface funcOp,
                          DominanceInfo const &dominanceInfo) {
   SmallVector<Flow::DispatchRegionOp> regionOps;
   funcOp.walk([&](Flow::DispatchRegionOp op) { regionOps.push_back(op); });
@@ -228,7 +225,7 @@ createDefaultWorkgroupCountRegion(RewriterBase &rewriter,
   rewriter.create<Flow::ReturnOp>(loc, defaultCountOp.getResults());
 
   // Update the `workgroupsOp` region.
-  rewriter.updateRootInPlace(workgroupsOp, [&]() {
+  rewriter.modifyOpInPlace(workgroupsOp, [&]() {
     // Update the workload of the op.
     workgroupsOp.getWorkloadMutable().assign(workload);
 
@@ -363,7 +360,4 @@ createFormDispatchWorkgroupsPass(bool generateWorkloadRegion) {
   return std::make_unique<FormDispatchWorkgroupsPass>(generateWorkloadRegion);
 }
 
-} // namespace Flow
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::Flow

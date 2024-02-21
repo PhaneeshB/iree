@@ -13,8 +13,7 @@ IREE_DEFINE_COMPILER_OPTION_FLAGS(
 IREE_DEFINE_COMPILER_OPTION_FLAGS(mlir::iree_compiler::SchedulingOptions);
 IREE_DEFINE_COMPILER_OPTION_FLAGS(mlir::iree_compiler::PreprocessingOptions);
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 void BindingOptions::bindOptions(OptionsBinder &binder) {
   static llvm::cl::OptionCategory category(
@@ -100,11 +99,20 @@ void GlobalOptimizationOptions::bindOptions(OptionsBinder &binder) {
       llvm::cl::desc("Converts all i64 ops and values into i32 counterparts "
                      "unconditionally before main global optimizations."),
       llvm::cl::cat(category));
-
+  binder.opt<bool>(
+      "iree-opt-aggressively-propagate-transposes",
+      aggressiveTransposePropagation,
+      llvm::cl::desc(
+          "Propagates transposes to named ops even when the resulting op will "
+          "be a linalg.generic"),
+      llvm::cl::cat(category));
+  binder.opt<bool>("iree-opt-outer-dim-concat", outerDimConcat,
+                   llvm::cl::desc("Transposes all concatenations to happen"
+                                  "along the outer most dimension."),
+                   llvm::cl::cat(category));
   binder.opt<bool>("iree-opt-data-tiling", dataTiling,
                    llvm::cl::desc("Enables data tiling path."),
                    llvm::cl::cat(category));
-
   binder.opt<bool>(
       "iree-opt-const-eval", constEval,
       llvm::cl::desc("Enables eager evaluation of constants using the full "
@@ -125,6 +133,30 @@ void GlobalOptimizationOptions::bindOptions(OptionsBinder &binder) {
                    llvm::cl::desc("Strips debug assertions after any useful "
                                   "information has been extracted."),
                    llvm::cl::cat(category));
+  binder.opt<std::string>(
+      "iree-opt-parameter-archive-export-file", parameterArchiveExportPath,
+      llvm::cl::desc(
+          "File path to create a parameter archive using any inline global "
+          "constants."),
+      llvm::cl::cat(category));
+  binder.opt<std::string>(
+      "iree-opt-parameter-archive-export-scope", parameterExportScope,
+      llvm::cl::desc("Scope for parameters in the archive created in "
+                     "`iree-opt-export-parameter-archive-export-file`."),
+      llvm::cl::cat(category));
+  binder.opt<int64_t>(
+      "iree-opt-minimum-parameter-export-size", minimumParameterExportSize,
+      llvm::cl::desc(
+          "Minimum size of constants to export to the archive created in "
+          "`iree-opt-export-parameter-archive-export-file`."),
+      llvm::cl::cat(category));
+  binder.opt<std::string>(
+      "iree-opt-splat-parameter-archive-export-file",
+      splatParameterArchiveExportPath,
+      llvm::cl::desc(
+          "File path to create a parameter archive of splat values out of all "
+          "parameter backed globals."),
+      llvm::cl::cat(category));
 }
 
 void SchedulingOptions::bindOptions(OptionsBinder &binder) {
@@ -188,7 +220,12 @@ void PreprocessingOptions::bindOptions(OptionsBinder &binder) {
       llvm::cl::desc("Textual description of the pass pipeline to run before "
                      "running normal IREE compilation pipelines"),
       llvm::cl::cat(category));
+  binder.opt<std::string>(
+      "iree-preprocessing-transform-spec-filename",
+      preprocessingTransformSpecFilename,
+      llvm::cl::desc(
+          "File name of a transform dialect spec to use for preprocessing"),
+      llvm::cl::cat(category));
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

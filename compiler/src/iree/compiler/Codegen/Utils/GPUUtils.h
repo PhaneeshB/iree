@@ -10,8 +10,8 @@
 #include "iree/compiler/Codegen/Utils/Utils.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
-namespace mlir {
-namespace iree_compiler {
+
+namespace mlir::iree_compiler {
 
 static constexpr int32_t kNumGPUDims = 3;
 static constexpr int32_t kWarpSize = 32;
@@ -36,7 +36,10 @@ getSubgroupIdsAndCounts(OpBuilder &builder, Location loc, unsigned warpSize,
                         unsigned numDims, llvm::ArrayRef<int64_t> numSubgroups);
 
 /// Returns the workgroup size associated to the funcOp entry point.
-std::array<int64_t, 3> getWorkgroupSize(func::FuncOp funcOp);
+std::array<int64_t, 3> getWorkgroupSize(mlir::FunctionOpInterface funcOp);
+
+/// Returns the subgroup size associated to the funcOp entry point.
+std::optional<int64_t> getSubgroupSize(mlir::FunctionOpInterface funcOp);
 
 //===----------------------------------------------------------------------===//
 // GPU vectorization
@@ -72,10 +75,10 @@ LogicalResult copyToWorkgroupMemory(OpBuilder &builder, Value src, Value dst);
 
 /// Propagates shared memory copy to producer linalg.fill or consumer
 /// linalg.generic when possible.
-void propagateSharedMemoryCopy(func::FuncOp funcOp);
+void propagateSharedMemoryCopy(mlir::FunctionOpInterface funcOp);
 
 /// Inserts barriers before and after shared memory copy.
-void insertBarriersAroundSharedMemoryCopy(func::FuncOp funcOp);
+void insertBarriersAroundSharedMemoryCopy(mlir::FunctionOpInterface funcOp);
 
 /// Emit reduction across a group for a given input. Emits `gpu.shuffle`
 /// based reduction only when `expandSubgroupReduce` is set.
@@ -110,7 +113,22 @@ Value unpackToVector(Location loc, OpBuilder &builder, Value packedInput,
 /// using shared memory when CodeGen towards the GPU.
 bool sharedMemTransposeFilter(AffineMap indexMap);
 
-} // namespace iree_compiler
-} // namespace mlir
+//===----------------------------------------------------------------------===//
+// GPU UKernel Utils
+//===----------------------------------------------------------------------===//
+
+/// Checks if target Chip(StringRef) has UKernel support.
+bool hasUkernelSupportedRocmArch(StringRef targetChip);
+
+/// Checks if targetAttr's GPU target has UKernel support.
+bool hasUkernelSupportedGpuArch(IREE::HAL::ExecutableTargetAttr targetAttr);
+
+//===----------------------------------------------------------------------===//
+// GPU Target Information
+//===----------------------------------------------------------------------===//
+
+FailureOr<ArrayAttr> getSupportedMmaTypes(mlir::FunctionOpInterface entryPoint);
+
+} // namespace mlir::iree_compiler
 
 #endif // IREE_COMPILER_CODEGEN_UTILS_GPUUTILS_H_

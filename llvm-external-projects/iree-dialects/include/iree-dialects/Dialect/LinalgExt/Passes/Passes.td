@@ -10,15 +10,9 @@
 include "mlir/Pass/PassBase.td"
 
 def LinalgExtToLoops :
-    Pass<"iree-linalg-ext-to-loops", "func::FuncOp"> {
+    InterfacePass<"iree-linalg-ext-to-loops", "mlir::FunctionOpInterface"> {
   let summary = "Convert LinalgExt ops to loops and Linalg ops.";
   let constructor = "mlir::iree_compiler::IREE::LinalgExt::createLinalgExtToLoopsPass()";
-}
-
-def TilingInterfaceTiling :
-    Pass<"iree-linalg-ext-tile", "func::FuncOp"> {
-  let summary = "Test pass for tiling using TiledOpInterface";
-  let constructor = "mlir::iree_compiler::IREE::LinalgExt::createTilingInterfaceTilingPass()";
 }
 
 def PadContractionToBlockSize :
@@ -45,7 +39,7 @@ def PadContractionToBlockSize :
 }
 
 def TopkSplitReduction:
-    Pass<"iree-linalg-ext-topk-split-reduction", "func::FuncOp"> {
+    InterfacePass<"iree-linalg-ext-topk-split-reduction", "mlir::FunctionOpInterface"> {
   let summary = "Topk split reduction pass.";
   let description = [{
     Produces a "map-reduce" style of parallelizing a Topk Op. The op is split
@@ -60,7 +54,7 @@ def TopkSplitReduction:
 }
 
 def TileAndDecomposeWinogradTransform :
-    Pass<"iree-linalg-ext-tile-and-decompose-winograd", "func::FuncOp"> {
+    InterfacePass<"iree-linalg-ext-tile-and-decompose-winograd", "mlir::FunctionOpInterface"> {
   let summary =
       "Tiles and decomposes winograd transform ops into linalg ops";
   let constructor = "mlir::iree_compiler::IREE::LinalgExt::"
@@ -77,16 +71,8 @@ def ConvertConv2DToWinograd :
   let constructor = "mlir::iree_compiler::IREE::LinalgExt::createConvertConv2DToWinogradPass()";
 }
 
-def DecomposeSoftmax :
-    Pass<"iree-linalg-ext-decompose-softmax", "func::FuncOp"> {
-  let summary =
-      "Decomposes softmax op into a sequence of linalg ops";
-  let constructor = "mlir::iree_compiler::IREE::LinalgExt::"
-                    "createDecomposeSoftmaxPass()";
-}
-
 def TileAndDecomposeAttention :
-    Pass<"iree-linalg-ext-tile-and-decompose-attention", "func::FuncOp"> {
+    InterfacePass<"iree-linalg-ext-tile-and-decompose-attention", "mlir::FunctionOpInterface"> {
   let summary =
       "Tiles and decomposes attention op into a sequence of linalg ops";
   let constructor = "mlir::iree_compiler::IREE::LinalgExt::"
@@ -94,6 +80,8 @@ def TileAndDecomposeAttention :
   let options = [
     Option<"onlyTile", "onlyTile", "bool", /*default=*/"false",
            "Choose whether to only tile or go through till decomposition">,
+    Option<"tileSize", "tileSize", "uint64_t", /*default=*/"",
+           "Tile size for sequential for loop in attention">,
   ];
 }
 

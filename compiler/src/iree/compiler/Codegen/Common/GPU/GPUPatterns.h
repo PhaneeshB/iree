@@ -8,8 +8,8 @@
 #define IREE_COMPILER_CODEGEN_COMMON_GPUPATTERNS_H_
 
 #include "mlir/IR/PatternMatch.h"
-namespace mlir {
-namespace iree_compiler {
+
+namespace mlir::iree_compiler {
 
 /// Adds patterns for preparing vector transfer ops for converting to GPU
 /// subgroup MMA load/store ops.
@@ -29,7 +29,25 @@ void populateContractPromotionPatterns(RewritePatternSet &patterns,
 
 void populateDropSharedMemoryDeallocOpPatterns(RewritePatternSet &patterns);
 
-} // namespace iree_compiler
-} // namespace mlir
+void populateGPUDistributionPatterns(RewritePatternSet &patterns);
+
+void populateGPUDistributionLayoutAttrPatterns(Value laneId,
+                                               RewritePatternSet &patterns);
+
+void populateGPUReductionDistributionPatterns(RewritePatternSet &patterns,
+                                              int64_t maxBitsPerShuffle = 32);
+
+void populateGPUDistributeNestedLayoutAttrPatterns(Value threadId,
+                                                   RewritePatternSet &patterns);
+
+// Adds patterns that distributes vector.contract ops with nested layout
+// annotations to amdgpu.mfma ops.
+void populateGPUDistributeNestedLayoutContractAMDGPUPatterns(
+    RewritePatternSet &patterns);
+
+void populateGPULayoutResolutionDistributionPatterns(
+    RewritePatternSet &patterns);
+
+} // namespace mlir::iree_compiler
 
 #endif // IREE_COMPILER_CODEGEN_COMMON_GPUPATTERNS_H_

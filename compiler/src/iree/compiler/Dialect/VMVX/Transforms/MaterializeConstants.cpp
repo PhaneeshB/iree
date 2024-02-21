@@ -19,10 +19,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace VMVX {
+namespace mlir::iree_compiler::IREE::VMVX {
 
 static const char *kConstantBlockGlobalPrefix = "__constant_";
 static const char *kConstantBlockSetterName = "__set_constants";
@@ -91,9 +88,9 @@ public:
       valueGlobalOp.setPrivate();
       valueGlobalOps.push_back(valueGlobalOp);
       for (auto loadOp : loadOps) {
-        auto newOp = OpBuilder(loadOp).create<IREE::Util::GlobalLoadOp>(
-            loadOp.getLoc(), valueGlobalOp);
-        loadOp.replaceAllUsesWith(newOp.getResult());
+        OpBuilder builder(loadOp);
+        auto newOp = valueGlobalOp.createLoadOp(loadOp.getLoc(), builder);
+        loadOp.replaceAllUsesWith(newOp.getLoadedGlobalValue());
         loadOp.erase();
       }
     }
@@ -114,8 +111,9 @@ public:
         buffer.getLoc(), sizeof(uint32_t), 32);
     for (auto [ordinalGlobalOp, valueGlobalOp] :
          llvm::zip_equal(ordinalGlobalOps, valueGlobalOps)) {
-      Value loadedOrdinal = setterBuilder.create<IREE::Util::GlobalLoadOp>(
-          ordinalGlobalOp.getLoc(), ordinalGlobalOp);
+      Value loadedOrdinal =
+          ordinalGlobalOp.createLoadOp(ordinalGlobalOp.getLoc(), setterBuilder)
+              .getLoadedGlobalValue();
       Value bufferOffset = setterBuilder.create<arith::MulIOp>(
           loadedOrdinal.getLoc(), loadedOrdinal, elementSizeI32);
       Value loadedValue = setterBuilder.create<IREE::Util::BufferLoadOp>(
@@ -124,8 +122,8 @@ public:
                                                    setterBuilder.getIndexType(),
                                                    bufferOffset),
           elementSizeIndex);
-      setterBuilder.create<IREE::Util::GlobalStoreOp>(
-          valueGlobalOp.getLoc(), loadedValue, valueGlobalOp);
+      valueGlobalOp.createStoreOp(valueGlobalOp.getLoc(), loadedValue,
+                                  setterBuilder);
     }
     setterBuilder.create<func::ReturnOp>(setterOp.getLoc());
   }
@@ -136,7 +134,4 @@ createMaterializeConstantsPass() {
   return std::make_unique<MaterializeConstantsPass>();
 }
 
-} // namespace VMVX
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::VMVX

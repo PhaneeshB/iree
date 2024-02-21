@@ -11,8 +11,7 @@
 #include "iree/compiler/Codegen/LLVMGPU/Utils/LLVMGPUUtils.h"
 #include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -28,10 +27,9 @@ public:
 };
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createLLVMGPUPackSharedMemoryAlloc() {
   return std::make_unique<LLVMGPUPackSharedMemoryAllocPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

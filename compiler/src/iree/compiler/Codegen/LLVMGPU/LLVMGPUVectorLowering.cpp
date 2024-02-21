@@ -13,8 +13,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 //====---------------------------------------------------------------------===//
 // Patterns for late vector op lowering.
@@ -30,7 +29,7 @@ struct LLVMGPUVectorLoweringPass
     registry.insert<scf::SCFDialect>();
   }
   void runOnOperation() override {
-    func::FuncOp funcOp = getOperation();
+    auto funcOp = getOperation();
 
     {
       // Lower high level vector operations like contract or multidim reduce ops
@@ -71,9 +70,9 @@ struct LLVMGPUVectorLoweringPass
 };
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> createLLVMGPUVectorLoweringPass() {
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createLLVMGPUVectorLoweringPass() {
   return std::make_unique<LLVMGPUVectorLoweringPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

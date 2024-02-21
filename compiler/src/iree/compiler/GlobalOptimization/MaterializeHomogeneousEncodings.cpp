@@ -10,9 +10,9 @@
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/GlobalOptimization/PassDetail.h"
 #include "iree/compiler/GlobalOptimization/Passes.h"
+#include "iree/compiler/Utils/PassUtils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -20,9 +20,10 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace GlobalOptimization {
+namespace mlir::iree_compiler::GlobalOptimization {
+
+using FunctionLikeNest =
+    MultiOpNest<IREE::Util::InitializerOp, IREE::Util::FuncOp>;
 
 class MaterializeHomogeneousEncodingsPass
     : public MaterializeHomogeneousEncodingsBase<
@@ -34,17 +35,21 @@ public:
     registry.insert<IREE::HAL::HALDialect>();
   }
 
+  void runNopPipeline(ModuleOp &moduleOp) {
+    OpPassManager passManager(moduleOp.getOperationName());
+    FunctionLikeNest(passManager).addPass(createMaterializeEncodingIntoNopPass);
+    FunctionLikeNest(passManager).addPass(createCanonicalizerPass);
+    if (failed(runPipeline(passManager, moduleOp))) {
+      return signalPassFailure();
+    }
+  }
+
   void runOnOperation() override {
     auto moduleOp = getOperation();
-    auto targetsAttr = moduleOp->getAttrOfType<ArrayAttr>("hal.device.targets");
-    if (!targetsAttr || targetsAttr.size() != 1) {
-      return;
-    }
-    auto deviceTarget = cast<IREE::HAL::DeviceTargetAttr>(targetsAttr[0]);
-    SmallVector<IREE::HAL::ExecutableTargetAttr, 4> executableTargets =
-        deviceTarget.getExecutableTargets();
+    auto executableTargets =
+        IREE::HAL::DeviceTargetAttr::lookupExecutableTargets(moduleOp);
     if (executableTargets.size() != 1) {
-      return;
+      return runNopPipeline(moduleOp);
     }
     // TODO: vmvx has its own logic about supporting dynamic tile
     // sizes. It is not fully integrated into the pipeline, so we remain the
@@ -55,18 +60,17 @@ public:
     }
 
     // Only llvm-cpu backends handle encodings for now, others just go with nop.
-    OpPassManager passManager(moduleOp.getOperationName());
-    if (executableTarget.getBackend() == "llvm-cpu") {
-      passManager.addNestedPass<func::FuncOp>(
-          createCPUMaterializeUpperBoundTileSizePass(executableTargets));
-      passManager.addNestedPass<func::FuncOp>(
-          createCPUMaterializeEncodingPass(executableTarget));
-    } else {
-      passManager.addNestedPass<func::FuncOp>(
-          createMaterializeEncodingIntoNopPass());
-      passManager.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+    if (executableTarget.getBackend() != "llvm-cpu") {
+      return runNopPipeline(moduleOp);
     }
 
+    OpPassManager passManager(moduleOp.getOperationName());
+    FunctionLikeNest(passManager).addPass([&]() {
+      return createCPUMaterializeUpperBoundTileSizePass(executableTargets);
+    });
+    FunctionLikeNest(passManager).addPass([&]() {
+      return createCPUMaterializeEncodingPass(executableTarget);
+    });
     if (failed(runPipeline(passManager, moduleOp))) {
       return signalPassFailure();
     }
@@ -78,6 +82,4 @@ createMaterializeHomogeneousEncodingsPass() {
   return std::make_unique<MaterializeHomogeneousEncodingsPass>();
 }
 
-} // namespace GlobalOptimization
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::GlobalOptimization

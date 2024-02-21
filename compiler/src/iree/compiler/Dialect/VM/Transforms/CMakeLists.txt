@@ -23,6 +23,7 @@ iree_cc_library(
     "HoistInlinedRodata.cpp"
     "OrdinalAllocation.cpp"
     "Passes.cpp"
+    "ReifyRodataTables.cpp"
     "ResolveRodataLoads.cpp"
     "SinkDefiningOps.cpp"
   DEPS
@@ -33,6 +34,7 @@ iree_cc_library(
     MLIRAffineUtils
     MLIRArithTransforms
     MLIRFuncDialect
+    MLIRFunctionInterfaces
     MLIRIR
     MLIRMathDialect
     MLIRMemRefDialect

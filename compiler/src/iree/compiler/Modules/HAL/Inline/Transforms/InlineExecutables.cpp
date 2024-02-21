@@ -22,11 +22,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace HAL {
-namespace Inline {
+namespace mlir::iree_compiler::IREE::HAL::Inline {
 
 class InlineExecutablesPass
     : public InlineExecutablesBase<InlineExecutablesPass> {
@@ -119,7 +115,7 @@ public:
           innerModuleBuilder.getFunctionType(inputTypes, {});
 
       // Create the function and insert into the module.
-      auto dispatchFuncOp = func::FuncOp::create(
+      auto dispatchFuncOp = IREE::Util::FuncOp::create(
           exportOp.getLoc(),
           ("__dispatch_" + executableOp.getName() + "_" + exportOp.getName())
               .str(),
@@ -131,7 +127,7 @@ public:
 
       // Build the dispatch function by calling the target function in a loop.
       auto bodyFuncOp =
-          innerSymbolTable.lookup<func::FuncOp>(exportOp.getName());
+          innerSymbolTable.lookup<FunctionOpInterface>(exportOp.getName());
       if (!bodyFuncOp) {
         return exportOp.emitOpError("missing body function");
       }
@@ -185,7 +181,8 @@ public:
   // about the function signatures.
   LogicalResult
   rewriteWorkgroupSignature(IREE::HAL::PipelineLayoutAttr layoutAttr,
-                            size_t totalBindingCount, func::FuncOp bodyFuncOp) {
+                            size_t totalBindingCount,
+                            FunctionOpInterface bodyFuncOp) {
     auto *entryBlock = &bodyFuncOp.front();
     auto builder = OpBuilder::atBlockBegin(entryBlock);
     auto indexType = builder.getIndexType();
@@ -337,8 +334,9 @@ public:
   //    workgroup_count_x, workgroup_count_y, workgroup_count_z)
   void buildDispatchFunc(IREE::HAL::ExecutableExportOp exportOp,
                          IREE::HAL::PipelineLayoutAttr layoutAttr,
-                         size_t totalBindingCount, func::FuncOp bodyFuncOp,
-                         func::FuncOp dispatchFuncOp) {
+                         size_t totalBindingCount,
+                         FunctionOpInterface bodyFuncOp,
+                         FunctionOpInterface dispatchFuncOp) {
     auto loc = exportOp.getLoc();
     auto builder = OpBuilder::atBlockBegin(dispatchFuncOp.addEntryBlock());
     IndexSet indexSet(loc, builder);
@@ -412,8 +410,9 @@ public:
                     [&](OpBuilder &forXBuilder, Location loc, Value ix,
                         ValueRange iters) {
                       workgroupArgs[workgroupXYZOffset + 0] = ix;
-                      forXBuilder.create<func::CallOp>(loc, bodyFuncOp,
-                                                       workgroupArgs);
+                      forXBuilder.create<func::CallOp>(
+                          loc, bodyFuncOp.getNameAttr(),
+                          bodyFuncOp.getResultTypes(), workgroupArgs);
                       forXBuilder.create<scf::YieldOp>(loc);
                     });
                 forYBuilder.create<scf::YieldOp>(loc);
@@ -421,7 +420,7 @@ public:
           forZBuilder.create<scf::YieldOp>(loc);
         });
 
-    builder.create<func::ReturnOp>(loc);
+    builder.create<IREE::Util::ReturnOp>(loc);
   }
 };
 
@@ -429,8 +428,4 @@ std::unique_ptr<OperationPass<mlir::ModuleOp>> createInlineExecutablesPass() {
   return std::make_unique<InlineExecutablesPass>();
 }
 
-} // namespace Inline
-} // namespace HAL
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::HAL::Inline

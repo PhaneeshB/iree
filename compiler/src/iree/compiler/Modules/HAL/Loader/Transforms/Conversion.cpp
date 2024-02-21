@@ -25,11 +25,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace HAL {
-namespace Loader {
+namespace mlir::iree_compiler::IREE::HAL::Loader {
 
 // Runs conversion with registered input dialects.
 class ConversionPass : public ConversionBase<ConversionPass> {
@@ -108,8 +104,4 @@ std::unique_ptr<OperationPass<mlir::ModuleOp>> createConversionPass() {
   return std::make_unique<ConversionPass>();
 }
 
-} // namespace Loader
-} // namespace HAL
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::HAL::Loader

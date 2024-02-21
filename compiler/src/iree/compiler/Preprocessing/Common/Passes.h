@@ -9,33 +9,44 @@
 
 #include <functional>
 
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
+namespace mlir::iree_compiler::Preprocessing {
 
 /// Creates a pass to convert linalg convolution ops into linalg.matmul ops
 /// using im2col tranformation.
 std::unique_ptr<Pass> createConvertConv2DToImg2ColPass();
 
+// Creates a pass to convert linalg NCHW Convolutions to NHWC.
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createConvertConvNchwToNhwcPass();
+
 /// Moves the body of the entire function into a single dispatch.
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createMakeSingleDispatchForFunctionPass();
 
-/// A pass to pad linalg ops to the next integer multiple of `paddingSize`.
+// A pass to generalize all conv-like ops.
+std::unique_ptr<Pass> createGeneralizeConvolutionsPass();
+
+// Creates a pass to convert convolutions to channels last and propagate.
+std::unique_ptr<Pass> createConvertConvToChannelsLastPass();
+
+// A pass to pad linalg ops to the next integer multiple of `paddingSize`.
 std::unique_ptr<Pass> createPadLinalgOpsToIntegerMultiplePass();
 
 //===----------------------------------------------------------------------===//
 // Register all Passes
 //===----------------------------------------------------------------------===//
 
+#define GEN_PASS_DECL
+#include "iree/compiler/Preprocessing/Common/Passes.h.inc" // IWYU pragma: keep
+
 void registerCommonPreprocessingPasses();
 
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::Preprocessing
 
-#endif // IREE_COMPILER_PREPROCESSING_COMMON_PASSES_H_W_TRANSFORMS_PASSES_H_
+#endif // IREE_COMPILER_PREPROCESSING_COMMON_PASSES_H_

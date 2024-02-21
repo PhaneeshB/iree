@@ -23,8 +23,7 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 void ConvertToDynamicSharedMemory(ModuleOp moduleOp) {
   SymbolTableCollection symbolTableCollection;
@@ -139,7 +138,7 @@ struct ConvertSharedMemAllocOp : public OpRewritePattern<memref::AllocOp> {
       return failure();
     ArrayRef<int64_t> shape = allocOp.getType().getShape();
     if (llvm::any_of(shape,
-                     [](int64_t dim) { return dim == ShapedType::kDynamic; })) {
+                     [](int64_t dim) { return ShapedType::isDynamic(dim); })) {
       return failure();
     }
 
@@ -161,7 +160,7 @@ struct ConvertSharedMemAllocOp : public OpRewritePattern<memref::AllocOp> {
     }
     // In CUDA workgroup memory is represented by a global variable.
     MemRefType allocType = allocOp.getType();
-    auto funcOp = allocOp->getParentOfType<func::FuncOp>();
+    auto funcOp = allocOp->getParentOfType<mlir::FunctionOpInterface>();
     auto moduleOp = funcOp->getParentOfType<ModuleOp>();
     SymbolTable symbolTable(moduleOp);
     OpBuilder::InsertionGuard guard(rewriter);
@@ -429,7 +428,7 @@ public:
         desc.setConstantStride(rewriter, loc, rank - 1, 1);
         OpFoldResult currentStride = rewriter.getIndexAttr(1);
         for (int i = rank - 1; i > 0; --i) {
-          if (strides[i - 1] == ShapedType::kDynamic) {
+          if (ShapedType::isDynamic(strides[i - 1])) {
             auto dim = desc.size(rewriter, loc, i);
             Value currentStrideVal;
             if (std::optional<int64_t> currentStrideInt =
@@ -506,7 +505,7 @@ struct HALInterfaceWorkgroupOpsConverter final
   }
 };
 
-} // anonymous namespace
+} // namespace
 
 void populateLLVMConversionPatterns(MLIRContext *context,
                                     RewritePatternSet &patterns,
@@ -520,13 +519,13 @@ void populateScalarizeMathOps(RewritePatternSet &patterns) {
   patterns.add<ScalarizeMathOp<math::SqrtOp>, ScalarizeMathOp<math::AbsFOp>,
                ScalarizeMathOp<math::AtanOp>, ScalarizeMathOp<math::Atan2Op>,
                ScalarizeMathOp<math::CeilOp>, ScalarizeMathOp<math::CosOp>,
-               ScalarizeMathOp<math::ExpOp>, ScalarizeMathOp<math::ExpM1Op>,
-               ScalarizeMathOp<math::FloorOp>, ScalarizeMathOp<math::LogOp>,
-               ScalarizeMathOp<math::Log1pOp>, ScalarizeMathOp<math::Log10Op>,
-               ScalarizeMathOp<math::Log2Op>, ScalarizeMathOp<math::PowFOp>,
-               ScalarizeMathOp<math::RsqrtOp>, ScalarizeMathOp<math::SinOp>,
-               ScalarizeMathOp<math::SqrtOp>, ScalarizeMathOp<math::TanhOp>>(
-      patterns.getContext());
+               ScalarizeMathOp<math::ExpOp>, ScalarizeMathOp<math::Exp2Op>,
+               ScalarizeMathOp<math::ExpM1Op>, ScalarizeMathOp<math::FloorOp>,
+               ScalarizeMathOp<math::LogOp>, ScalarizeMathOp<math::Log1pOp>,
+               ScalarizeMathOp<math::Log10Op>, ScalarizeMathOp<math::Log2Op>,
+               ScalarizeMathOp<math::PowFOp>, ScalarizeMathOp<math::RsqrtOp>,
+               ScalarizeMathOp<math::SinOp>, ScalarizeMathOp<math::SqrtOp>,
+               ScalarizeMathOp<math::TanhOp>>(patterns.getContext());
 }
 
 void populateConvertSharedMemoryAllocOps(RewritePatternSet &patterns) {
@@ -560,5 +559,4 @@ void populateGpuMemorySpaceAttributeConversions(
       });
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

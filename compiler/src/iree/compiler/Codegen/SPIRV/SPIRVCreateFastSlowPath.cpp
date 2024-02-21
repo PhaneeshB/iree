@@ -31,8 +31,7 @@
 
 #define DEBUG_TYPE "iree-spirv-create-fast-slow-path"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 /// Returns true if the the given `attrOrValue` is a constant zero.
 static bool isZero(OpFoldResult attrOrValue) {
@@ -49,7 +48,7 @@ static bool isZero(OpFoldResult attrOrValue) {
 /// This pattern works by creating an `scf.if` op with conditions derived from
 /// `tensor.pad` op padding sizes, and copying all ops excluding those for
 /// computing padding sizes to both regions of the `scf.if` op.
-static void applyFastSlowPathConversion(func::FuncOp funcOp) {
+static void applyFastSlowPathConversion(mlir::FunctionOpInterface funcOp) {
   Block *body = &(*funcOp.getBlocks().begin());
 
   // Find the anchor tensor.pad op, from which we get the conditions for
@@ -138,7 +137,7 @@ struct SPIRVCreateFastSlowPathPass final
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
-    func::FuncOp funcOp = getOperation();
+    auto funcOp = getOperation();
 
     applyFastSlowPathConversion(funcOp);
 
@@ -155,10 +154,9 @@ struct SPIRVCreateFastSlowPathPass final
 
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createSPIRVCreateFastSlowPathPass() {
   return std::make_unique<SPIRVCreateFastSlowPathPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

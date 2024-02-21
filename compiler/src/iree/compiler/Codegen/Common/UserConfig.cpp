@@ -6,12 +6,11 @@
 
 #include "iree/compiler/Codegen/Common/UserConfig.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 /// Propagate the configuration annotated in the incoming IR.
 LogicalResult
-setUserConfig(func::FuncOp entryPointFn, Operation *computeOp,
+setUserConfig(mlir::FunctionOpInterface entryPointFn, Operation *computeOp,
               IREE::Codegen::CompilationInfoAttr compilationInfo) {
   if (auto translationInfo = getTranslationInfo(entryPointFn)) {
     return computeOp->emitOpError(
@@ -34,5 +33,4 @@ setUserConfig(func::FuncOp entryPointFn, Operation *computeOp,
   return success();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

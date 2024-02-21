@@ -35,8 +35,7 @@
 constexpr int kMaxVectorNumBits = 128;
 constexpr int kMaxVectorNumElements = 4;
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 //===----------------------------------------------------------------------===//
 // Utility Functions
@@ -254,7 +253,7 @@ private:
 MemRefUsageAnalysis::MemRefUsageAnalysis(mlir::Operation *op) {
   op->walk([&](Operation *op) {
     TypeSwitch<Operation *>(op)
-        .Case<func::FuncOp>([this](func::FuncOp funcOp) {
+        .Case<mlir::FunctionOpInterface>([this](auto funcOp) {
           for (Value arg : funcOp.getArguments()) {
             analyzeMemRefValue(arg);
           }
@@ -324,7 +323,7 @@ public:
                                       signatureConverter);
 
     // Creates a new function with the update signature.
-    rewriter.updateRootInPlace(funcOp, [&] {
+    rewriter.modifyOpInPlace(funcOp, [&] {
       funcOp.setType(rewriter.getFunctionType(
           signatureConverter.getConvertedTypes(), std::nullopt));
     });
@@ -567,13 +566,13 @@ MemRefConversionPattern<OpTy>::getVectorizedMemRefType(
   MemRefLayoutAttrInterface layout = {};
   if (auto stridedLayout = dyn_cast<StridedLayoutAttr>(type.getLayout())) {
     auto offset = stridedLayout.getOffset();
-    if (offset != ShapedType::kDynamic) {
+    if (!ShapedType::isDynamic(offset)) {
       offset = offset / ratio;
     }
 
     auto strides = llvm::to_vector(stridedLayout.getStrides());
     for (auto [index, stride] : llvm::enumerate(llvm::drop_end(strides))) {
-      if (index == strides.size() - 1 || stride == ShapedType::kDynamic) {
+      if (index == strides.size() - 1 || ShapedType::isDynamic(stride)) {
         continue;
       }
       strides[index] = stride / ratio;
@@ -736,8 +735,8 @@ public:
   LogicalResult
   matchAndRewrite(OpT op, typename OpT::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.updateRootInPlace(op,
-                               [&] { op->setOperands(adaptor.getOperands()); });
+    rewriter.modifyOpInPlace(op,
+                             [&] { op->setOperands(adaptor.getOperands()); });
     return success();
   }
 };
@@ -787,8 +786,8 @@ struct ScalarizeVectorTransferRead final
     if (vectorType.getRank() == 0) {
       Value maybeMaskBit;
       if (maybeMask) {
-        Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-        maybeMaskBit = rewriter.create<vector::ExtractOp>(loc, maybeMask, zero);
+        maybeMaskBit = rewriter.create<vector::ExtractOp>(loc, maybeMask,
+                                                          ArrayRef<int64_t>{0});
       }
 
       auto thenCond = [&](OpBuilder &b, Location loc) {
@@ -821,17 +820,17 @@ struct ScalarizeVectorTransferRead final
     Value newVector = rewriter.create<arith::ConstantOp>(
         loc, vectorType, rewriter.getZeroAttr(vectorType));
     for (int i = 0; i < vectorType.getDimSize(0); ++i) {
-      Value iVal = rewriter.create<arith::ConstantIndexOp>(loc, i);
-
       // Extract the mask bit for this value if present.
       Value maybeMaskBit;
       if (maybeMask) {
         // The result vector is 1-D and we have a projected permutation, meaning
         // we can just extract the mask bit using the same index as the loaded
         // vector.
-        maybeMaskBit = rewriter.create<vector::ExtractOp>(loc, maybeMask, iVal);
+        maybeMaskBit = rewriter.create<vector::ExtractOp>(loc, maybeMask,
+                                                          ArrayRef<int64_t>{i});
       }
 
+      Value iVal = rewriter.create<arith::ConstantIndexOp>(loc, i);
       auto thenCond = [&](OpBuilder &b, Location loc) {
         indices[dimPos] = b.create<affine::AffineApplyOp>(
             loc, addMap, ValueRange{oldIndex, iVal});
@@ -912,8 +911,8 @@ struct ScalarizeVectorTransferWrite final
 
       Value maybeMaskBit;
       if (maybeMask) {
-        Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-        maybeMaskBit = rewriter.create<vector::ExtractOp>(loc, maybeMask, zero);
+        maybeMaskBit = rewriter.create<vector::ExtractOp>(loc, maybeMask,
+                                                          ArrayRef<int64_t>{0});
       }
 
       auto thenCond = [&](OpBuilder &b, Location loc) {
@@ -941,16 +940,16 @@ struct ScalarizeVectorTransferWrite final
     auto indices = llvm::to_vector(writeOp.getIndices());
     Value oldIndex = indices[dimPos];
     for (int i = 0; i < vectorType.getDimSize(0); ++i) {
-      Value iVal = rewriter.create<arith::ConstantIndexOp>(loc, i);
-
       Value maybeMaskBit;
       if (maybeMask) {
         // The result vector is 1-D and we have a projected permutation, meaning
         // we can just extract the mask bit using the same index as the written
         // vector.
-        maybeMaskBit = rewriter.create<vector::ExtractOp>(loc, maybeMask, iVal);
+        maybeMaskBit = rewriter.create<vector::ExtractOp>(loc, maybeMask,
+                                                          ArrayRef<int64_t>{i});
       }
 
+      Value iVal = rewriter.create<arith::ConstantIndexOp>(loc, i);
       auto thenCond = [&](OpBuilder &b, Location loc) {
         indices[dimPos] = b.create<affine::AffineApplyOp>(
             loc, addMap, ValueRange{oldIndex, iVal});
@@ -1039,7 +1038,7 @@ void SPIRVVectorizeLoadStorePass::runOnOperation() {
   MLIRContext *context = &getContext();
 
   // Prior pass should have unrolled and broken down vectors with rank > 1.
-  for (func::FuncOp func : module.getOps<func::FuncOp>()) {
+  for (auto func : module.getOps<mlir::FunctionOpInterface>()) {
     auto result = func.walk([](VectorTransferOpInterface transferOp) {
       if (cast<VectorType>(transferOp.getVectorType()).getRank() > 1) {
         transferOp.emitOpError(
@@ -1095,7 +1094,7 @@ void SPIRVVectorizeLoadStorePass::runOnOperation() {
     return signalPassFailure();
   }
 
-  for (func::FuncOp func : module.getOps<func::FuncOp>()) {
+  for (auto func : module.getOps<mlir::FunctionOpInterface>()) {
     RewritePatternSet rewritingPatterns(context);
     rewritingPatterns.add<ScalarizeVectorTransferRead, ScalarizeVectorLoad,
                           ScalarizeVectorTransferWrite>(context);
@@ -1112,5 +1111,4 @@ std::unique_ptr<OperationPass<ModuleOp>> createSPIRVVectorizeLoadStore() {
   return std::make_unique<SPIRVVectorizeLoadStorePass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

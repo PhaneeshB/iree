@@ -9,8 +9,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -20,11 +19,6 @@ struct LLVMCPUAssignConstantOrdinalsPass
   LLVMCPUAssignConstantOrdinalsPass() = default;
   void runOnOperation() override {
     auto variantOp = getOperation();
-
-    // Ignore non-LLVMCPU variants.
-    // TODO(benvanik): a way to nest this in the pipeline via dynamic passes.
-    if (variantOp.getTarget().getBackend().getValue() != "llvm-cpu")
-      return;
 
     // Get a constant key -> ordinal mapping.
     auto keyOrdinals = variantOp.gatherConstantOrdinals();
@@ -62,5 +56,4 @@ createLLVMCPUAssignConstantOrdinalsPass() {
   return std::make_unique<LLVMCPUAssignConstantOrdinalsPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

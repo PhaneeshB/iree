@@ -63,7 +63,6 @@ emcmake "${CMAKE_BIN?}" -G Ninja .. \
     -DIREE_BUILD_EXPERIMENTAL_WEB_SAMPLES=OFF \
     -DIREE_BUILD_SAMPLES=OFF \
     -DIREE_ENABLE_THREADING=ON \
-    -DIREE_ENABLE_CPUINFO=OFF \
     -DIREE_ENABLE_ASAN=OFF \
     -DIREE_BUILD_TESTS=ON
 
@@ -101,4 +100,4 @@ echo "=== Copying static files to the build directory ==="
 
 cp ${SOURCE_DIR?}/test-runner.html ${BINARY_DIR}
 cp ${SOURCE_DIR?}/*.js ${BINARY_DIR}
-cp ${ROOT_DIR?}/docs/website/overrides/.icons/iree/ghost.svg ${BINARY_DIR}
+cp ${ROOT_DIR?}/docs/website/docs/assets/images/ghost.svg ${BINARY_DIR}

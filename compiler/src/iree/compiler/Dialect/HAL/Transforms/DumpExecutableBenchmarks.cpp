@@ -11,6 +11,7 @@
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/HAL/Transforms/Passes.h"
 #include "iree/compiler/Dialect/Stream/IR/StreamOps.h"
+#include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "iree/compiler/Utils/IndexSet.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -26,10 +27,12 @@
 
 #define DEBUG_TYPE "iree-dump-executable-benchmarks"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace HAL {
+namespace mlir::iree_compiler::IREE::HAL {
+
+#define GEN_PASS_DEF_DUMPEXECUTABLEBENCHMARKSPASS
+#include "iree/compiler/Dialect/HAL/Transforms/Passes.h.inc"
+
+namespace {
 
 // We could use the resource constraints in the module when we have them.
 static const int64_t kBufferAlignment = 256;
@@ -65,7 +68,7 @@ using DispatchParamsMap =
 static DispatchParamsMap gatherDispatchParams(mlir::ModuleOp moduleOp) {
   DispatchParamsMap map;
 
-  for (auto funcOp : moduleOp.getOps<FunctionOpInterface>()) {
+  for (auto funcOp : moduleOp.getOps<mlir::FunctionOpInterface>()) {
     funcOp.walk([&](IREE::Stream::CmdDispatchOp dispatchOp) {
       // TODO(benvanik): typed accessors for bindings.
       auto bindingAttrs = llvm::dyn_cast_if_present<ArrayAttr>(
@@ -176,8 +179,8 @@ appendGlobalBuffer(Location loc, StringRef baseName,
   auto initBuilder = OpBuilder::atBlockBegin(initOp.addEntryBlock());
   IndexSet indexSet(loc, initBuilder);
 
-  // TODO(benvanik): real device lookup.
-  auto device = initBuilder.create<IREE::HAL::ExSharedDeviceOp>(loc);
+  // TODO(multi-device): support multiple devices in benchmark generation.
+  Value device = IREE::HAL::DeviceType::resolveAny(loc, initBuilder);
   auto allocator =
       initBuilder.create<IREE::HAL::DeviceAllocatorOp>(loc, device).getResult();
 
@@ -189,9 +192,8 @@ appendGlobalBuffer(Location loc, StringRef baseName,
       loc, globalOp.getType(), allocator, queueAffinity, memoryTypes,
       bufferUsage, indexSet.get(totalLength));
 
-  initBuilder.create<IREE::Util::GlobalStoreOp>(loc, allocateOp.getResult(),
-                                                globalOp.getNameAttr());
-  initBuilder.create<IREE::Util::InitializerReturnOp>(loc);
+  globalOp.createStoreOp(loc, allocateOp.getResult(), initBuilder);
+  initBuilder.create<IREE::Util::ReturnOp>(loc);
 
   return globalOp;
 }
@@ -225,7 +227,8 @@ static void appendDispatchBenchmark(IREE::HAL::ExecutableOp executableOp,
   // Create an exported benchmark function that runs the dispatches.
   auto funcType =
       moduleBuilder.getFunctionType({moduleBuilder.getI32Type()}, {});
-  auto funcOp = moduleBuilder.create<func::FuncOp>(loc, baseName, funcType);
+  auto funcOp =
+      moduleBuilder.create<IREE::Util::FuncOp>(loc, baseName, funcType);
   funcOp.setVisibility(SymbolTable::Visibility::Public);
 
   // Mark the function as being a dispatch benchmark.
@@ -245,8 +248,8 @@ static void appendDispatchBenchmark(IREE::HAL::ExecutableOp executableOp,
   auto batchSizeArg = funcBuilder.create<arith::IndexCastOp>(
       loc, funcBuilder.getIndexType(), entryBlock->getArgument(0));
 
-  // TODO(benvanik): real device lookup.
-  auto device = funcBuilder.create<IREE::HAL::ExSharedDeviceOp>(loc);
+  // TODO(multi-device): support multiple devices in benchmark generation.
+  Value device = IREE::HAL::DeviceType::resolveAny(loc, funcBuilder);
 
   // Create and begin command buffer.
   // TODO(benvanik): reuse the command buffer (initialize once and store).
@@ -285,9 +288,8 @@ static void appendDispatchBenchmark(IREE::HAL::ExecutableOp executableOp,
   }
 
   // Push descriptor sets.
-  auto buffer =
-      funcBuilder.create<IREE::Util::GlobalLoadOp>(loc, bufferGlobalOp)
-          .getResult();
+  Value buffer =
+      bufferGlobalOp.createLoadOp(loc, funcBuilder).getLoadedGlobalValue();
   int64_t currentSet = -1;
   SmallVector<IREE::HAL::DescriptorSetBindingValue> bindingValues;
   auto flushSet = [&]() {
@@ -375,7 +377,7 @@ static void appendDispatchBenchmark(IREE::HAL::ExecutableOp executableOp,
   funcBuilder.create<IREE::Util::StatusCheckOkOp>(
       loc, fenceOp.getStatus(), "failed to wait on timepoint");
 
-  funcBuilder.create<mlir::func::ReturnOp>(loc);
+  funcBuilder.create<IREE::Util::ReturnOp>(loc);
 }
 
 // Builds a module exporting one function for each dispatch configuration
@@ -449,28 +451,15 @@ static void dumpModuleToStream(mlir::ModuleOp moduleOp, StringRef fileName,
   os << "\n"; // newline at end of file
 }
 
-class DumpExecutableBenchmarksPass
-    : public PassWrapper<DumpExecutableBenchmarksPass,
-                         OperationPass<ModuleOp>> {
-public:
-  DumpExecutableBenchmarksPass() = default;
-  DumpExecutableBenchmarksPass(const DumpExecutableBenchmarksPass &pass) {}
-  DumpExecutableBenchmarksPass(StringRef path) { this->path = path.str(); }
+//===----------------------------------------------------------------------===//
+// --iree-hal-dump-executable-benchmarks
+//===----------------------------------------------------------------------===//
 
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<IREE::HAL::HALDialect>();
-    registry.insert<arith::ArithDialect>();
-    registry.insert<scf::SCFDialect>();
-  }
-
-  StringRef getArgument() const override {
-    return "iree-hal-dump-executable-benchmarks";
-  }
-
-  StringRef getDescription() const override {
-    return "Dumps standalone hal.executable benchmarks to a path.";
-  }
-
+struct DumpExecutableBenchmarksPass
+    : public IREE::HAL::impl::DumpExecutableBenchmarksPassBase<
+          DumpExecutableBenchmarksPass> {
+  using IREE::HAL::impl::DumpExecutableBenchmarksPassBase<
+      DumpExecutableBenchmarksPass>::DumpExecutableBenchmarksPassBase;
   void runOnOperation() override {
     auto moduleOp = getOperation();
     auto moduleName = moduleOp.getName().value_or("module");
@@ -522,23 +511,8 @@ public:
       }
     }
   }
-
-private:
-  Option<std::string> path{
-      *this, "path",
-      llvm::cl::desc("Path to write hal.executable benchmarks into.")};
 };
 
-std::unique_ptr<OperationPass<ModuleOp>>
-createDumpExecutableBenchmarksPass(StringRef path) {
-  return std::make_unique<DumpExecutableBenchmarksPass>(path);
-}
+} // namespace
 
-static PassRegistration<DumpExecutableBenchmarksPass> pass([] {
-  return std::make_unique<DumpExecutableBenchmarksPass>();
-});
-
-} // namespace HAL
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::HAL

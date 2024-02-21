@@ -25,10 +25,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace Flow {
+namespace mlir::iree_compiler::IREE::Flow {
 
 namespace {
 /// Pattern to convert a tensor.tensor operation into a fill +
@@ -91,9 +88,8 @@ struct TensorPadToTensorInsertSlicePass
   TensorPadToTensorInsertSlicePass(bool skipSingleLinalgOpUses)
       : skipSingleLinalgOpUses(skipSingleLinalgOpUses) {}
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry
-        .insert<linalg::LinalgDialect, memref::MemRefDialect, func::FuncDialect,
-                mlir::math::MathDialect, mlir::arith::ArithDialect>();
+    registry.insert<linalg::LinalgDialect, memref::MemRefDialect,
+                    mlir::math::MathDialect, mlir::arith::ArithDialect>();
   }
 
   LogicalResult initializeOptions(StringRef options) override {
@@ -129,7 +125,4 @@ createTensorPadToTensorInsertSlicePass(bool skipSingleLinalgOpUses) {
       skipSingleLinalgOpUses);
 }
 
-} // namespace Flow
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::Flow

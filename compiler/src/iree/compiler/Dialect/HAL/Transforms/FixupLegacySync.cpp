@@ -4,20 +4,23 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include "iree/compiler/Dialect/HAL/IR/HALDialect.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/HAL/Transforms/Passes.h"
+#include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace HAL {
+namespace mlir::iree_compiler::IREE::HAL {
+
+#define GEN_PASS_DEF_FIXUPLEGACYSYNCPASS
+#include "iree/compiler/Dialect/HAL/Transforms/Passes.h.inc"
+
+namespace {
 
 // Marks a command buffer as being executable inline during recording.
 // This is only possible because we generate our command buffer code without
@@ -137,19 +140,12 @@ static void insertWaitIfNeeded(Operation *asyncOp,
   }
 }
 
-// NOTE: this pass only exists for backwards compatibility with legacy HAL
-// drivers. It will be removed once all have migrated to the modern async APIs.
+//===----------------------------------------------------------------------===//
+// --iree-hal-fixup-legacy-sync
+//===----------------------------------------------------------------------===//
+
 struct FixupLegacySyncPass
-    : public PassWrapper<FixupLegacySyncPass, OperationPass<mlir::ModuleOp>> {
-  StringRef getArgument() const override {
-    return "iree-hal-fixup-legacy-sync";
-  }
-
-  StringRef getDescription() const override {
-    return "Applies fixups to the program for when using legacy HAL devices "
-           "that only support synchronous execution";
-  }
-
+    : public IREE::HAL::impl::FixupLegacySyncPassBase<FixupLegacySyncPass> {
   void runOnOperation() override {
     auto moduleOp = getOperation();
 
@@ -162,7 +158,7 @@ struct FixupLegacySyncPass
 
     // This could use an interface but it'd be better to remove the need for
     // this pass instead.
-    for (auto funcOp : moduleOp.getOps<FunctionOpInterface>()) {
+    for (auto funcOp : moduleOp.getOps<mlir::FunctionOpInterface>()) {
       funcOp.walk([&](Operation *op) {
         TypeSwitch<Operation *, void>(op)
             .Case([&](IREE::HAL::CommandBufferCreateOp op) {
@@ -185,13 +181,6 @@ struct FixupLegacySyncPass
   }
 };
 
-std::unique_ptr<OperationPass<mlir::ModuleOp>> createFixupLegacySyncPass() {
-  return std::make_unique<FixupLegacySyncPass>();
-}
+} // namespace
 
-static PassRegistration<FixupLegacySyncPass> pass;
-
-} // namespace HAL
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::HAL

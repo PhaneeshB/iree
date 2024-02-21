@@ -76,10 +76,9 @@ func.func @truncf_vector(%arg0 : vector<4xbf16>) -> vector<4xbf16> {
 }
 
 // CHECK-LABEL: @truncf_vector
-// CHECK: %[[CST:.+]] = arith.constant dense<1.000000e+00> : vector<4xbf16>
+// CHECK: %[[CST:.+]] = arith.constant dense<1.000000e+00> : vector<4xf32>
 // CHECK: %[[VAL0:.+]] = arith.extf %arg0 : vector<4xbf16> to vector<4xf32>
-// CHECK: %[[VAL1:.+]] = arith.extf %[[CST]] : vector<4xbf16> to vector<4xf32>
-// CHECK: %[[VAL2:.+]] = arith.addf %[[VAL1]], %[[VAL0]] : vector<4xf32>
+// CHECK: %[[VAL2:.+]] = arith.addf %[[VAL0]], %[[CST]] : vector<4xf32>
 // CHECK: %[[VAL3:.+]] = arith.truncf %[[VAL2]] : vector<4xf32> to vector<4xbf16>
 // CHECK: return %[[VAL3]] : vector<4xbf16>
 
@@ -130,3 +129,18 @@ func.func @fma_f32_regression(%a : vector<[32]xf32>, %b : vector<[32]xf32>, %c :
   %res = vector.fma %a, %b, %c : vector<[32]xf32>
   return %res : vector<[32]xf32>
 }
+
+// -----
+
+func.func @outerproduct_bf16(%arg0 : vector<1xbf16>, %arg1 : vector<1xbf16>, %arg2 : vector<1x1xbf16>) -> vector<1x1xbf16> {
+  %0 = vector.outerproduct %arg0, %arg1, %arg2 {kind = #vector.kind<add>} : vector<1xbf16>, vector<1xbf16>
+  return %0 : vector<1x1xbf16>
+}
+
+// CHECK-LABEL: func.func @outerproduct_bf16
+// CHECK-DAG: %[[EXT0:.+]] = arith.extf %arg0
+// CHECK-DAG: %[[EXT1:.+]] = arith.extf %arg1
+// CHECK-DAG: %[[EXT2:.+]] = arith.extf %arg2
+// CHECK: %[[PROD:.+]] = vector.outerproduct %[[EXT0]], %[[EXT1]], %[[EXT2]] {kind = #vector.kind<add>} : vector<1xf32>, vector<1xf32>
+// CHECK: %[[TRUNC:.+]] = arith.truncf %[[PROD]] : vector<1x1xf32> to vector<1x1xbf16>
+// CHECK: return %[[TRUNC]] : vector<1x1xbf16>

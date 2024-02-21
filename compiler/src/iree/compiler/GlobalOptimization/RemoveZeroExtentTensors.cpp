@@ -12,9 +12,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace GlobalOptimization {
+namespace mlir::iree_compiler::GlobalOptimization {
 
 /// Check if a `t` is a `tensor` with zero extents.
 static std::optional<RankedTensorType> isZeroExtent(Type t) {
@@ -53,7 +51,7 @@ struct ReplaceZeroExtentOperands : public RewritePattern {
       auto shape = tensor::getMixedSizes(rewriter, loc, operand.get());
       auto emptyTensorOp = rewriter.create<tensor::EmptyOp>(
           loc, shape, operandType->getElementType());
-      rewriter.updateRootInPlace(
+      rewriter.modifyOpInPlace(
           owner, [&]() { owner->setOperand(operandNum, emptyTensorOp); });
       didUpdate = true;
     }
@@ -108,6 +106,4 @@ createRemoveZeroExtentTensorsPass() {
   return std::make_unique<RemoveZeroExtentTensorsPass>();
 }
 
-} // namespace GlobalOptimization
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::GlobalOptimization

@@ -11,7 +11,6 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
@@ -20,8 +19,7 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -147,10 +145,9 @@ struct ConvertMemRefGlobalOp : public OpConversionPattern<memref::GlobalOp> {
     auto constantOp = initializerBuilder.create<IREE::Util::BufferConstantOp>(
         globalOp.getLoc(), /*name=*/nullptr, globalOp.getInitialValueAttr(),
         alignmentAttr, /*mimeType=*/nullptr);
-    initializerBuilder.create<IREE::Util::GlobalStoreOp>(
-        globalOp.getLoc(), constantOp.getResult(), newOp.getName());
-    initializerBuilder.create<IREE::Util::InitializerReturnOp>(
-        globalOp.getLoc());
+    newOp.createStoreOp(globalOp.getLoc(), constantOp.getResult(),
+                        initializerBuilder);
+    initializerBuilder.create<IREE::Util::ReturnOp>(globalOp.getLoc());
 
     return success();
   }
@@ -329,5 +326,4 @@ void populateMemRefToUtilPatterns(MLIRContext *context,
           typeConverter, context);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

@@ -35,12 +35,11 @@
 
 #include "iree/compiler/Codegen/Common/PassDetail.h"
 #include "iree/compiler/Codegen/Common/Passes.h"
-#include "iree/compiler/Codegen/Dialect/UKernelOps.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/UKernelOps.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/Transforms/Transforms.h"
@@ -54,14 +53,14 @@
 #include "mlir/IR/DialectResourceBlobManager.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #define DEBUG_TYPE "iree-flatten-memref-subspan"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -328,8 +327,8 @@ struct FlattenReinterpretCast
       return rewriter.notifyMatchFailure(op, "unhandled non-zero offset");
     }
 
-    rewriter.updateRootInPlace(op,
-                               [&] { op->setOperand(0, adaptor.getSource()); });
+    rewriter.modifyOpInPlace(op,
+                             [&] { op->setOperand(0, adaptor.getSource()); });
     return success();
   }
 };
@@ -737,6 +736,25 @@ struct RemoveDynamicCastOp final : public OpRewritePattern<memref::CastOp> {
   }
 };
 
+/// Removes memref.cast that turns dynamic shapes into static shapes.
+struct RemoveStaticCastOp final : public OpRewritePattern<memref::CastOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(memref::CastOp castOp,
+                                PatternRewriter &rewriter) const override {
+    auto srcType = castOp.getSource().getType().cast<MemRefType>();
+    auto dstType = castOp.getType().cast<MemRefType>();
+    // Restrict to the cases we generate in this pass--1-D static shape to 1-D
+    // dynamic shape.
+    if (srcType.getRank() == 1 && !srcType.hasStaticShape() &&
+        dstType.getRank() == 1 && dstType.hasStaticShape()) {
+      rewriter.replaceOp(castOp, castOp.getSource());
+      return success();
+    }
+    return failure();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Pass
 //===----------------------------------------------------------------------===//
@@ -895,6 +913,7 @@ struct FlattenMemRefSubspanPass
     memref::AllocaOp::getCanonicalizationPatterns(cleanupPatterns, context);
     memref::SubViewOp::getCanonicalizationPatterns(cleanupPatterns, context);
     cleanupPatterns.add<RemoveDynamicCastOp>(context);
+    cleanupPatterns.add<RemoveStaticCastOp>(context);
 
     if (failed(applyPatternsAndFoldGreedily(getOperation(),
                                             std::move(cleanupPatterns)))) {
@@ -909,5 +928,4 @@ std::unique_ptr<OperationPass<ModuleOp>> createFlattenMemRefSubspanPass() {
   return std::make_unique<FlattenMemRefSubspanPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

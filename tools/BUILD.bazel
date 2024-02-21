@@ -34,29 +34,9 @@ iree_runtime_cc_binary(
         "//runtime/src/iree/modules/hal:types",
         "//runtime/src/iree/tooling:context_util",
         "//runtime/src/iree/tooling:device_util",
-        "//runtime/src/iree/tooling:vm_util",
+        "//runtime/src/iree/tooling:function_io",
         "//runtime/src/iree/vm",
         "@com_google_benchmark//:benchmark",
-    ],
-)
-
-iree_runtime_cc_binary(
-    name = "iree-benchmark-trace",
-    srcs = ["iree-benchmark-trace-main.c"],
-    deps = [
-        "//runtime/src/iree/base",
-        "//runtime/src/iree/base/internal:atomic_slist",
-        "//runtime/src/iree/base/internal:file_io",
-        "//runtime/src/iree/base/internal:flags",
-        "//runtime/src/iree/base/internal:path",
-        "//runtime/src/iree/hal",
-        "//runtime/src/iree/testing:benchmark",
-        "//runtime/src/iree/tooling:device_util",
-        "//runtime/src/iree/tooling:trace_replay",
-        "//runtime/src/iree/tooling:vm_util",
-        "//runtime/src/iree/tooling:yaml_util",
-        "//runtime/src/iree/vm",
-        "@com_github_yaml_libyaml//:yaml",
     ],
 )
 
@@ -73,9 +53,23 @@ iree_runtime_cc_binary(
         "//runtime/src/iree/testing:gtest",
         "//runtime/src/iree/tooling:context_util",
         "//runtime/src/iree/tooling:device_util",
-        "//runtime/src/iree/tooling:vm_util",
         "//runtime/src/iree/vm",
         "//runtime/src/iree/vm/bytecode:module",
+    ],
+)
+
+iree_runtime_cc_binary(
+    name = "iree-convert-parameters",
+    srcs = ["iree-convert-parameters-main.c"],
+    deps = [
+        "//runtime/src/iree/base",
+        "//runtime/src/iree/base/internal:file_io",
+        "//runtime/src/iree/base/internal:flags",
+        "//runtime/src/iree/hal",
+        "//runtime/src/iree/io:parameter_index",
+        "//runtime/src/iree/io:scope_map",
+        "//runtime/src/iree/io/formats/irpa",
+        "//runtime/src/iree/tooling:parameter_util",
     ],
 )
 
@@ -86,6 +80,21 @@ iree_runtime_cc_binary(
         "//runtime/src/iree/base",
         "//runtime/src/iree/base/internal:cpu",
         "//runtime/src/iree/schemas:cpu_data",
+    ],
+)
+
+iree_runtime_cc_binary(
+    name = "iree-create-parameters",
+    srcs = ["iree-create-parameters-main.c"],
+    deps = [
+        "//runtime/src/iree/base",
+        "//runtime/src/iree/base/internal:file_io",
+        "//runtime/src/iree/base/internal:flags",
+        "//runtime/src/iree/hal",
+        "//runtime/src/iree/io:parameter_index",
+        "//runtime/src/iree/io:scope_map",
+        "//runtime/src/iree/io:stream",
+        "//runtime/src/iree/io/formats/irpa",
     ],
 )
 
@@ -194,25 +203,8 @@ iree_runtime_cc_binary(
 )
 
 iree_runtime_cc_binary(
-    name = "iree-run-trace",
-    srcs = ["iree-run-trace-main.c"],
-    deps = [
-        "//runtime/src/iree/base",
-        "//runtime/src/iree/base/internal:flags",
-        "//runtime/src/iree/base/internal:path",
-        "//runtime/src/iree/hal",
-        "//runtime/src/iree/tooling:device_util",
-        "//runtime/src/iree/tooling:trace_replay",
-        "//runtime/src/iree/tooling:vm_util",
-        "//runtime/src/iree/tooling:yaml_util",
-        "//runtime/src/iree/vm",
-        "@com_github_yaml_libyaml//:yaml",
-    ],
-)
-
-iree_runtime_cc_binary(
     name = "iree-e2e-matmul-test",
-    srcs = ["iree-e2e-matmul-test.c"],
+    srcs = ["iree-e2e-matmul-test.cc"],
     deps = [
         "//runtime/src/iree/base",
         "//runtime/src/iree/base/internal",
@@ -221,12 +213,10 @@ iree_runtime_cc_binary(
         "//runtime/src/iree/base/internal:path",
         "//runtime/src/iree/hal",
         "//runtime/src/iree/modules/hal",
+        "//runtime/src/iree/tooling:context_util",
         "//runtime/src/iree/tooling:device_util",
-        "//runtime/src/iree/tooling:trace_replay",
-        "//runtime/src/iree/tooling:vm_util",
-        "//runtime/src/iree/tooling:yaml_util",
         "//runtime/src/iree/vm",
-        "@com_github_yaml_libyaml//:yaml",
+        "//runtime/src/iree/vm:cc",
     ],
 )
 

@@ -24,11 +24,15 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/SetVector.h"
+#include <chrono>
+#include <iostream>
 
 namespace mlir {
 namespace iree_compiler {
 namespace IREE {
 namespace LinalgExt {
+
+static const char winogradAttr[] = "iree_winograd_conv";
 
 static inline int index(int y, int x, int dimy, int dimx) {
   return (x + dimx * y);
@@ -45,7 +49,7 @@ static bool hasAllOneValues(DenseIntElementsAttr attr) {
 
 // TODO: Make this a user-settable parameter once we have support
 // for more tile sizes
-static constexpr int64_t outputTileSize = 6;
+static constexpr int64_t outputTileSize = 4;
 
 /// This function computes the Winograd filter transform when
 /// the filter is known to be a constant. Specifically, this
@@ -70,30 +74,50 @@ foldFilterTransform(ArrayRef<int64_t> shape, int64_t inputTileSize,
   const int &kw = isNchw ? shape[3] : shape[1];
   const int &ic = isNchw ? shape[1] : shape[2];
   const int &oc = isNchw ? shape[0] : shape[3];
+  //printf("Folding filter with kh = %d, kw = %d, ic = %d, oc = %d\n", kh, kw, ic, oc);
   const int64_t numElements = inputTileSize * inputTileSize * ic * oc;
+  float *alloc{nullptr};
+  if (!isSplat) {
+    alloc = (float *) malloc(kh * kw * ic * oc * sizeof(float));
+    for (int d2 = 0; d2 < ic; d2++) {
+      for (int d3 = 0; d3 < oc; d3++) {
+        for (int d4 = 0; d4 < kernelSize; d4++) {
+          for (int d5 = 0; d5 < kernelSize; d5++) {
+	    int idx;
+            if (!isNchw) {
+              idx = index(d4, d5, d2, d3, kh, kw, ic, oc);
+            } else {
+              idx = index(d3, d2, d4, d5, oc, ic, kh, kw);
+            }
+	    alloc[idx] = input[idx].convertToFloat();
+	  }
+	}
+      }
+    }
+  }
   SmallVector<APFloat> output(numElements, APFloat(0.0f));
   for (int d0 = 0; d0 < inputTileSize; d0++) {
     for (int d1 = 0; d1 < inputTileSize; d1++) {
       for (int d2 = 0; d2 < ic; d2++) {
         for (int d3 = 0; d3 < oc; d3++) {
-          APFloat accum(0.0f);
+          float accum(0.0f);
           for (int d4 = 0; d4 < kernelSize; d4++) {
             for (int d5 = 0; d5 < kernelSize; d5++) {
-              APFloat ival(splatValue);
+              float ival{splatValue};
               if (!isSplat) {
                 if (!isNchw) {
-                  ival = input[index(d4, d5, d2, d3, kh, kw, ic, oc)];
+                  ival = alloc[index(d4, d5, d2, d3, kh, kw, ic, oc)];
                 } else {
-                  ival = input[index(d3, d2, d4, d5, oc, ic, kh, kw)];
+                  ival = alloc[index(d3, d2, d4, d5, oc, ic, kh, kw)];
                 }
               }
               int idx0 = index(d0, d4, inputTileSize, kernelSize);
               int idx1 = index(d1, d5, inputTileSize, kernelSize);
-              accum = accum + APFloat(G[idx0]) * ival * APFloat(G[idx1]);
+              accum = accum + G[idx0] * ival * G[idx1];
             }
           }
           int odx = index(d0, d1, d2, d3, inputTileSize, inputTileSize, ic, oc);
-          output[odx] = accum;
+          output[odx] = APFloat(accum);
           if (floatType.isF16()) {
             bool losesInfo;
             output[odx].convert(APFloat::IEEEhalf(),
@@ -103,6 +127,7 @@ foldFilterTransform(ArrayRef<int64_t> shape, int64_t inputTileSize,
       }
     }
   }
+  if (alloc) free(alloc);
   return DenseElementsAttr::get(outputType, output);
 }
 
@@ -134,9 +159,15 @@ template <typename ConvOp>
 class FoldWinogradFilterTransform final : public OpRewritePattern<ConvOp> {
 public:
   using OpRewritePattern<ConvOp>::OpRewritePattern;
+  FoldWinogradFilterTransform(MLIRContext *context, bool force)
+      : OpRewritePattern<ConvOp>(context, force), forceWinograd(force) {}
 
   LogicalResult matchAndRewrite(ConvOp convOp,
                                 PatternRewriter &rewriter) const override {
+
+    // Attribute control unless forced.
+    if (!forceWinograd && !convOp->hasAttr(winogradAttr))
+      return failure();
 
     bool isNchw;
     if (!isValidConv2d(convOp, isNchw))
@@ -157,10 +188,11 @@ public:
     const int64_t kernelSize = kh;
     const int64_t inputTileSize = outputTileSize + kernelSize - 1;
 
-    DenseIntOrFPElementsAttr kernelAttr;
-    if (!matchPattern(kernel, m_Constant(&kernelAttr))) {
+    Attribute rawKernelAttr;
+    if (!matchPattern(kernel, m_Constant(&rawKernelAttr)) || !isa<DenseIntOrFPElementsAttr>(rawKernelAttr)) {
       return failure();
     }
+    DenseIntOrFPElementsAttr kernelAttr = cast<DenseIntOrFPElementsAttr>(rawKernelAttr);
 
     Operation *constOp = kernel.getDefiningOp();
     ShapedType type = constOp->getResult(0).getType().cast<ShapedType>();
@@ -182,11 +214,14 @@ public:
     auto resultType = RankedTensorType::get(resultShape, elemType);
     auto foldedKernelAttr =
         foldFilterTransform(shape, inputTileSize, kernelSize, resultType,
-                            IREE::LinalgExt::Winograd::G_6x6_3x3, isSplat,
+                            IREE::LinalgExt::Winograd::G_4x4_3x3, isSplat,
                             splatValue, nonSplatValues, elemType, isNchw);
+
     rewriter.replaceOpWithNewOp<arith::ConstantOp>(constOp, foldedKernelAttr);
     return success();
   }
+ private:
+  bool forceWinograd;
 };
 
 } // namespace
@@ -283,9 +318,15 @@ template <typename ConvOp>
 class ConvertConvToWinograd final : public OpRewritePattern<ConvOp> {
 public:
   using OpRewritePattern<ConvOp>::OpRewritePattern;
+  ConvertConvToWinograd(MLIRContext *context, bool force)
+      : OpRewritePattern<ConvOp>(context, force), forceWinograd(force) {}
 
   LogicalResult matchAndRewrite(ConvOp convOp,
                                 PatternRewriter &rewriter) const override {
+
+    // Attribute control unless forced.
+    if (!forceWinograd && !convOp->hasAttr(winogradAttr))
+      return failure();
 
     bool isNchw;
     if (!isValidConv2d(convOp, isNchw))
@@ -416,10 +457,14 @@ public:
     result.replaceAllUsesWith(winogradOutput);
     return success();
   }
+ private:
+  bool forceWinograd;
 };
 
 struct ConvertConv2DToWinogradPass
     : ConvertConv2DToWinogradBase<ConvertConv2DToWinogradPass> {
+ public:
+  ConvertConv2DToWinogradPass(bool forceWinograd) : forceWinograd(forceWinograd) {}
   void getDependentDialects(DialectRegistry &registry) const override {
     registry
         .insert<linalg::LinalgDialect, IREE::LinalgExt::IREELinalgExtDialect>();
@@ -430,18 +475,20 @@ struct ConvertConv2DToWinogradPass
     patterns.insert<FoldWinogradFilterTransform<linalg::Conv2DNchwFchwOp>,
                     FoldWinogradFilterTransform<linalg::Conv2DNhwcHwcfOp>,
                     ConvertConvToWinograd<linalg::Conv2DNhwcHwcfOp>,
-                    ConvertConvToWinograd<linalg::Conv2DNchwFchwOp>>(context);
+                    ConvertConvToWinograd<linalg::Conv2DNchwFchwOp>>(context, forceWinograd);
     if (failed(applyPatternsAndFoldGreedily(getOperation(),
                                             std::move(patterns)))) {
       return signalPassFailure();
     }
   }
+ private:
+  bool forceWinograd;
 };
 
 } // namespace
 
-std::unique_ptr<Pass> createConvertConv2DToWinogradPass() {
-  return std::make_unique<ConvertConv2DToWinogradPass>();
+std::unique_ptr<Pass> createConvertConv2DToWinogradPass(bool forceWinograd) {
+  return std::make_unique<ConvertConv2DToWinogradPass>(forceWinograd);
 }
 
 } // namespace LinalgExt

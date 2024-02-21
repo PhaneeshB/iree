@@ -17,8 +17,7 @@
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 struct SPIRVGeneralizeNamedOpsPass
@@ -49,10 +48,9 @@ void SPIRVGeneralizeNamedOpsPass::runOnOperation() {
   }
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createSPIRVGeneralizeNamedOpsPass() {
   return std::make_unique<SPIRVGeneralizeNamedOpsPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

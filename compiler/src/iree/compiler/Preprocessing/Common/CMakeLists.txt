@@ -27,6 +27,10 @@ iree_cc_library(
     "Passes.h.inc"
   SRCS
     "ConvertConv2DToImg2Col.cpp"
+    "InterpreterPass.cpp"
+    "ConvertConvNchwToNhwc.cpp"
+    "ConvertConvToChannelsLast.cpp"
+    "GeneralizeConvolutions.cpp"
     "MakeSingleDispatchForFunction.cpp"
     "PadLinalgOps.cpp"
     "PassDetail.h"
@@ -43,6 +47,8 @@ iree_cc_library(
     MLIRPass
     MLIRTensorDialect
     MLIRTensorUtils
+    MLIRTransformDialect
+    MLIRTransformDialectTransforms
     MLIRTransforms
     iree::compiler::Dialect::Flow::IR
     iree::compiler::Dialect::Flow::Transforms

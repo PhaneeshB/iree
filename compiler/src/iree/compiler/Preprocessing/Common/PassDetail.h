@@ -7,20 +7,18 @@
 #ifndef IREE_COMPILER_PREPROCESSING_COMMON_PASS_DETAIL_H_
 #define IREE_COMPILER_PREPROCESSING_COMMON_PASS_DETAIL_H_
 
-#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Transform/IR/TransformDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
+namespace mlir::iree_compiler::Preprocessing {
 
 #define GEN_PASS_CLASSES
 #include "iree/compiler/Preprocessing/Common/Passes.h.inc" // IWYU pragma: keep
 
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::Preprocessing
 
 #endif // IREE_COMPILER_PREPROCESSING_COMMON_PASS_DETAIL_H_

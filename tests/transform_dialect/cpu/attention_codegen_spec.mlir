@@ -42,7 +42,7 @@ module attributes { transform.with_named_sequence } {
       transform.apply_patterns.canonicalization
     } : !transform.any_op
     transform.iree.apply_licm %variant_op : !transform.any_op
-    transform.iree.apply_cse %variant_op : !transform.any_op
+    transform.apply_cse to %variant_op : !transform.any_op
 
     // Bufferization
     // ==========================================
@@ -61,13 +61,18 @@ module attributes { transform.with_named_sequence } {
     transform.apply_patterns to %func_8 {
       transform.apply_patterns.canonicalization
     } : !transform.any_op
-    transform.iree.apply_cse %func_8 : !transform.any_op
+    transform.apply_cse to %func_8 : !transform.any_op
     transform.memref.erase_dead_alloc_and_stores %func_8 : (!transform.any_op) -> ()
+
+    // Annotate the exported function as already translated.
+    %exports = transform.structured.match ops{["hal.executable.export"]} in %variant_op_3 : (!transform.any_op) -> !transform.any_op
+    %none = transform.param.constant #iree_codegen.translation_info<None> -> !transform.any_param
+    transform.annotate %exports "translation_info" = %none : !transform.any_op, !transform.any_param
     transform.yield
   } // codegen
-  
+
   // Find `hal.executable.variant`.
-  transform.named_sequence @match_variant_for_codegen(%root: !transform.any_op {transform.readonly}) 
+  transform.named_sequence @match_variant_for_codegen(%root: !transform.any_op {transform.readonly})
     -> !transform.any_op {
     transform.match.operation_name %root ["hal.executable.variant"] : !transform.any_op
     transform.yield %root : !transform.any_op
@@ -78,7 +83,7 @@ module attributes { transform.with_named_sequence } {
     transform.foreach_match in %root
         @match_variant_for_codegen -> @codegen
       : (!transform.any_op) -> (!transform.any_op)
-    transform.yield 
+    transform.yield
   }
 } // module
 

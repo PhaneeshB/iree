@@ -15,8 +15,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 using namespace IREE::LinalgExt;
 
@@ -24,8 +23,7 @@ namespace {
 struct MaterializeEncodingIntoNopPass
     : public MaterializeEncodingIntoNopBase<MaterializeEncodingIntoNopPass> {
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<linalg::LinalgDialect, func::FuncDialect,
-                    tensor::TensorDialect>();
+    registry.insert<linalg::LinalgDialect, tensor::TensorDialect>();
   }
 
   void runOnOperation() override {
@@ -83,10 +81,9 @@ struct MaterializeEncodingIntoNopPass
 };
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createMaterializeEncodingIntoNopPass() {
   return std::make_unique<MaterializeEncodingIntoNopPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

@@ -18,11 +18,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/TypeUtilities.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace HAL {
-namespace Loader {
+namespace mlir::iree_compiler::IREE::HAL::Loader {
 
 //===----------------------------------------------------------------------===//
 // custom<DispatchBindings>($binding_buffers,
@@ -184,7 +180,7 @@ struct FoldBindingSubspansIntoDispatchOp
     }
     if (!didChangeAny)
       return failure();
-    rewriter.updateRootInPlace(op, [&]() {
+    rewriter.modifyOpInPlace(op, [&]() {
       op.getBindingBuffersMutable().assign(bindingBuffers);
       op.getBindingOffsetsMutable().assign(bindingOffsets);
     });
@@ -199,11 +195,7 @@ void ExecutableDispatchOp::getCanonicalizationPatterns(
   results.insert<FoldBindingSubspansIntoDispatchOp>(context);
 }
 
-} // namespace Loader
-} // namespace HAL
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::HAL::Loader
 
 //===----------------------------------------------------------------------===//
 // TableGen definitions (intentionally last)

@@ -7,10 +7,12 @@
 #include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtDialect.h"
 #include "iree-dialects/Dialect/LinalgExt/TransformOps/LinalgExtTransformOps.h"
 #include "iree-dialects/Dialect/LinalgTransform/StructuredTransformOpsExt.h"
+#include "iree-dialects/Dialect/VectorExt/IR/VectorExtDialect.h"
 #include "iree/compiler/Codegen/Common/PassDetail.h"
 #include "iree/compiler/Codegen/Common/Passes.h"
 #include "iree/compiler/Codegen/Common/TransformExtensions/CommonExtensions.h"
-#include "iree/compiler/Codegen/Dialect/IREECodegenDialect.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenDialect.h"
+#include "iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUDialect.h"
 #include "iree/compiler/Codegen/LLVMCPU/TransformExtensions/LLVMCPUExtensions.h"
 #include "iree/compiler/Codegen/LLVMGPU/TransformExtensions/LLVMGPUExtensions.h"
 #include "iree/compiler/Dialect/Flow/IR/FlowDialect.h"
@@ -19,6 +21,7 @@
 #include "mlir/Dialect/Affine/TransformOps/AffineTransformOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/ArmSME/IR/ArmSME.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Bufferization/TransformOps/BufferizationTransformOps.h"
 #include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
@@ -50,8 +53,7 @@
 #include "mlir/Dialect/Vector/Transforms/SubsetOpInterfaceImpl.h"
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 void registerTransformDialectTranslationDependentDialects(
     DialectRegistry &registry) {
@@ -61,8 +63,10 @@ void registerTransformDialectTranslationDependentDialects(
 
   // clang-format off
   registry.insert<mlir::iree_compiler::IREE::LinalgExt::IREELinalgExtDialect,
+                  mlir::iree_compiler::IREE::VectorExt::IREEVectorExtDialect,
                   mlir::iree_compiler::IREE::Flow::FlowDialect,
                   mlir::iree_compiler::IREE::Codegen::IREECodegenDialect,
+                  mlir::iree_compiler::IREE::GPU::IREEGPUDialect,
                   arith::ArithDialect,
                   affine::AffineDialect,
                   bufferization::BufferizationDialect,
@@ -75,9 +79,10 @@ void registerTransformDialectTranslationDependentDialects(
                   scf::SCFDialect,
                   tensor::TensorDialect,
                   transform::TransformDialect,
-                  vector::VectorDialect
-                  // clang-format on
-                  >();
+                  vector::VectorDialect,
+                  arm_sme::ArmSMEDialect
+      // clang-format on
+      >();
 
   // TODO: these should be registered by the extension instead, but there is
   // no support for it in core currently.
@@ -110,5 +115,4 @@ void registerTransformDialectTranslationDependentDialects(
   vector::registerTransformDialectExtension(registry);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

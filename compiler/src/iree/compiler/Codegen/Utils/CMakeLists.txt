@@ -37,6 +37,7 @@ iree_cc_library(
     MLIRArithDialect
     MLIRArithUtils
     MLIRFuncDialect
+    MLIRFunctionInterfaces
     MLIRGPUDialect
     MLIRIR
     MLIRLinalgDialect
@@ -44,6 +45,7 @@ iree_cc_library(
     MLIRLinalgUtils
     MLIRMemRefDialect
     MLIRSCFDialect
+    MLIRSCFTransforms
     MLIRSideEffectInterfaces
     MLIRSupport
     MLIRTensorDialect
@@ -56,6 +58,22 @@ iree_cc_library(
     iree::compiler::Codegen::Interfaces::UKernelOpInterface
     iree::compiler::Dialect::Flow::IR
     iree::compiler::Dialect::HAL::IR
+    iree::compiler::Utils
+  PUBLIC
+)
+
+iree_cc_library(
+  NAME
+    VectorOpUtils
+  HDRS
+    "VectorOpUtils.h"
+  SRCS
+    "VectorOpUtils.cpp"
+  DEPS
+    LLVMSupport
+    MLIRIR
+    MLIRSupport
+    MLIRVectorDialect
   PUBLIC
 )
 

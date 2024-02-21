@@ -24,7 +24,6 @@
 #include "llvm/Support/FormatVariadic.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/Transforms/Transforms.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -33,12 +32,12 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -284,6 +283,7 @@ struct ConvertBf16ArithToF32Pass
     // Some arithmetic operations exist in the vector dialect.
     target.addDynamicallyLegalOp<vector::FMAOp, vector::ReductionOp,
                                  vector::MultiDimReductionOp, vector::MaskOp,
+                                 vector::MatmulOp, vector::OuterProductOp,
                                  vector::YieldOp>(checkOp);
 
     // Some ops are always legal.
@@ -318,5 +318,4 @@ createConvertBf16ArithToF32Pass() {
   return std::make_unique<ConvertBf16ArithToF32Pass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

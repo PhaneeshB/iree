@@ -1,8 +1,8 @@
-// RUN: iree-opt --split-input-file --pass-pipeline='builtin.module(hal.executable(hal.executable.variant(iree-codegen-materialize-user-configs, iree-spirv-select-lowering-strategy-pass, iree-spirv-lower-executable-target-pass)))' %s | FileCheck %s
+// RUN: iree-opt --split-input-file --pass-pipeline='builtin.module(hal.executable(hal.executable.variant(iree-codegen-spirv-configuration-pipeline, iree-spirv-lower-executable-target-pass)))' %s | FileCheck %s
 
 #compilation = #iree_codegen.compilation_info<
     lowering_config  = <tile_sizes = [[32, 128, 1, 32]]>,
-    translation_info = <SPIRVMatmulPromoteVectorize pipeline_depth = 1>,
+    translation_info = <SPIRVMatmulPromoteVectorize, {pipeline_depth = 1, store_stage = 1}>,
     workgroup_size = [32, 8, 1]>
 #pipeline_layout = #hal.pipeline.layout<push_constants = 0, sets = [
   #hal.descriptor_set.layout<0, bindings = [

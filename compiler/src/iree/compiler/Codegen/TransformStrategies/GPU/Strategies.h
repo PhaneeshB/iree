@@ -8,17 +8,18 @@
 #define IREE_COMPILER_CODEGEN_TRANSFORM_DIALECT_STRATEGIES_GPU_STRATEGIES_H_
 
 #include "llvm/ADT/StringRef.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 
 namespace mlir {
 class ImplicitLocOpBuilder;
 class Value;
-namespace iree_compiler {
-namespace gpu {
+} // namespace mlir
+
+namespace mlir::iree_compiler::gpu {
 
 /// Forward declarations of all supported strategies.
-struct BatchMatmulStrategy;
-struct MatmulStrategy;
+class BatchMatmulStrategy;
+class MatmulStrategy;
 class PadStrategy;
 class SmallReductionStrategy;
 class StagedReductionStrategy;
@@ -137,12 +138,10 @@ void buildStagedReductionStrategy(ImplicitLocOpBuilder &b, Value variantH,
 //===----------------------------------------------------------------------===//
 
 /// Try to find an exisiting transform dialect strategy for a given entry point.
-LogicalResult matchAndSetTransformStrategy(func::FuncOp entryPoint,
+LogicalResult matchAndSetTransformStrategy(mlir::FunctionOpInterface entryPoint,
                                            Operation *op,
                                            const GPUModel &gpuModel);
 
-} // namespace gpu
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::gpu
 
 #endif // IREE_COMPILER_CODEGEN_TRANSFORM_DIALECT_STRATEGIES_GPU_STRATEGIES_H_

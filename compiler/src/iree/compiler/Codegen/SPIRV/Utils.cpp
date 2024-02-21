@@ -8,35 +8,59 @@
 
 #include "iree/compiler/Codegen/SPIRV/Utils.h"
 
-#include "iree/compiler/Codegen/Dialect/IREECodegenAttrs.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenAttrs.h"
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
-#include "mlir/Conversion/MemRefToSPIRV/MemRefToSPIRV.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/SPIRV/IR/TargetAndABI.h"
-#include "mlir/Support/LogicalResult.h"
+#include "mlir/IR/BuiltinAttributes.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
+
+bool usesSPIRVCodeGen(IREE::HAL::ExecutableVariantOp variantOp) {
+  if (variantOp.getObjects().has_value()) {
+    // Variants containing external executables do not go through CodeGen.
+    return false;
+  }
+
+  DictionaryAttr configuration = variantOp.getTargetAttr().getConfiguration();
+  // The spirv.target_env attribute is attached if going down SPIR-V CodeGen
+  // pipelines. Later we turn spirv.target_env into iree.spirv.features after
+  // materializing device queries.
+  return configuration.contains(spirv::getTargetEnvAttrName()) ||
+         configuration.contains("iree.spirv.features");
+}
 
 const char *getSPIRVDistributeAttrName() { return "iree.spirv.distribute_dim"; }
 
-spirv::TargetEnvAttr getSPIRVTargetEnvAttr(Operation *op) {
+DictionaryAttr getTargetConfigAttr(Operation *op) {
   auto variant = op->getParentOfType<IREE::HAL::ExecutableVariantOp>();
   if (!variant)
     return nullptr;
   IREE::HAL::ExecutableTargetAttr targetAttr = variant.getTarget();
   if (!targetAttr)
     return nullptr;
-  auto config = targetAttr.getConfiguration();
+  return targetAttr.getConfiguration();
+}
+
+spirv::TargetEnvAttr getSPIRVTargetEnvAttr(Operation *op) {
+  DictionaryAttr config = getTargetConfigAttr(op);
   if (!config)
     return nullptr;
   return config.getAs<spirv::TargetEnvAttr>(spirv::getTargetEnvAttrName());
 }
 
-std::optional<int> getSPIRVSubgroupSize(func::FuncOp funcOp) {
+UnitAttr getIndirectBindingsAttr(Operation *op) {
+  DictionaryAttr config = getTargetConfigAttr(op);
+  if (!config)
+    return nullptr;
+
+  return config.getAs<UnitAttr>("hal.bindings.indirect");
+}
+
+std::optional<int> getSPIRVSubgroupSize(mlir::FunctionOpInterface funcOp) {
   auto moduleOp = funcOp->getParentOfType<ModuleOp>();
   llvm::StringMap<IREE::HAL::ExecutableExportOp> exportOps =
       getAllEntryPoints(moduleOp);
@@ -52,8 +76,8 @@ std::optional<int> getSPIRVSubgroupSize(func::FuncOp funcOp) {
   return target.getResourceLimits().getSubgroupSize();
 }
 
-FailureOr<SmallVector<int64_t>> getSPIRVTileSize(func::FuncOp funcOp,
-                                                 int tilingLevel) {
+FailureOr<SmallVector<int64_t>>
+getSPIRVTileSize(mlir::FunctionOpInterface funcOp, int tilingLevel) {
   SmallVector<Operation *> computeOps = getComputeOps(funcOp);
   auto config = getLoweringConfig(computeOps);
   if (failed(config)) {
@@ -64,7 +88,7 @@ FailureOr<SmallVector<int64_t>> getSPIRVTileSize(func::FuncOp funcOp,
 }
 
 FailureOr<linalg::TileSizeComputationFunction>
-getSPIRVTileSizeComputeFn(func::FuncOp funcOp, int tilingLevel) {
+getSPIRVTileSizeComputeFn(mlir::FunctionOpInterface funcOp, int tilingLevel) {
   auto tileSizes = getSPIRVTileSize(funcOp, tilingLevel);
   if (failed(tileSizes))
     return failure();
@@ -75,6 +99,25 @@ getSPIRVTileSizeComputeFn(func::FuncOp funcOp, int tilingLevel) {
         });
         return llvm::to_vector(range);
       };
+  return computeFn;
+}
+
+FailureOr<scf::SCFTileSizeComputationFunction>
+getSPIRVScfTileSizeComputeFn(mlir::FunctionOpInterface funcOp,
+                             int tilingLevel) {
+  FailureOr<SmallVector<int64_t>> tileSizes =
+      getSPIRVTileSize(funcOp, tilingLevel);
+  if (failed(tileSizes))
+    return failure();
+  scf::SCFTileSizeComputationFunction computeFn =
+      [tileSizes](OpBuilder &builder,
+                  Operation *op) -> SmallVector<OpFoldResult> {
+    auto tileSizesOfr = getAsIndexOpFoldResult(op->getContext(), *tileSizes);
+    auto zeroAttr = builder.getIndexAttr(0);
+    int numLoops = cast<TilingInterface>(op).getLoopIteratorTypes().size();
+    tileSizesOfr.resize(numLoops, zeroAttr);
+    return tileSizesOfr;
+  };
   return computeFn;
 }
 
@@ -116,5 +159,4 @@ template SmallVector<linalg::ProcInfo, 2>
 getGPUProcessorIdsAndCounts<gpu::ThreadIdOp, gpu::BlockDimOp>(
     OpBuilder &builder, Location loc, unsigned numDims);
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

@@ -10,6 +10,7 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/MathExtras.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
@@ -19,11 +20,13 @@
 #include "mlir/IR/TypeSupport.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Types.h"
+#include "mlir/Interfaces/CallInterfaces.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace Util {
+// clang-format off: must be included after all LLVM/MLIR headers.
+#include "iree/compiler/Dialect/Util/IR/UtilEnums.h.inc" // IWYU pragma: keep
+// clang-format on
+
+namespace mlir::iree_compiler::IREE::Util {
 
 class GlobalOpInterface;
 class GlobalAccessorOpInterface;
@@ -102,6 +105,11 @@ bool isValueUsableForOp(Value value, Operation *op);
 // Returns true if the move was successful.
 bool tryMoveProducerBefore(Value value, Operation *consumerOp);
 
+// Returns true if the given callable op is public or external (no body).
+// Such callables cannot have their signature changed without (potentially)
+// breaking linking.
+bool isPublicOrExternal(CallableOpInterface callableOp);
+
 //===----------------------------------------------------------------------===//
 // Global and structural interface utilities
 //===----------------------------------------------------------------------===//
@@ -128,6 +136,7 @@ lookupGlobalOp(Operation *accessorOp, SymbolRefAttr globalRefAttr,
 
 namespace detail {
 
+void getAllTiedOperands(Operation *op, SmallVectorImpl<int64_t> &indices);
 std::optional<unsigned> getTiedResultOperandIndex(Operation *op,
                                                   unsigned resultIndex);
 void setTiedResultOperandIndex(Operation *op, unsigned resultIndex,
@@ -161,8 +170,18 @@ std::optional<ValueRange> findDynamicDims(Value shapedValue, Block *block,
                                           Block::iterator insertionPoint);
 
 // Returns the dynamic dimensions for the value at |idx|.
-ValueRange findVariadicDynamicDims(unsigned idx, ValueRange values,
-                                   ValueRange dynamicDims);
+// |dynamicDims| is zero or more dynamic dimensions corresponding to the
+// |values| list of arbitrary types.
+// Shaped types will return zero or more dynamic dimension values.
+// Sized types will return exactly one value.
+ValueRange findDynamicDimsInList(unsigned idx, ValueRange values,
+                                 ValueRange dynamicDims);
+
+// Returns the size of the size-aware typed value at |idx| in |values|.
+// |dynamicDims| is zero or more dynamic dimensions corresponding to the
+// |values| list of arbitrary types.
+Value findValueSizeInList(unsigned idx, ValueRange values,
+                          ValueRange dynamicDims);
 
 // Returns dimension values for each dynamic dimension of the given |value|.
 // |value| must be a ShapedType. The returned value range will be empty if the
@@ -287,10 +306,7 @@ static inline int64_t getRoundedPhysicalStorageSize(ShapedType type) {
                                        type.getElementType());
 }
 
-} // namespace Util
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::Util
 
 #include "iree/compiler/Dialect/Util/IR/UtilAttrInterfaces.h.inc" // IWYU pragma: export
 #include "iree/compiler/Dialect/Util/IR/UtilOpInterfaces.h.inc" // IWYU pragma: export

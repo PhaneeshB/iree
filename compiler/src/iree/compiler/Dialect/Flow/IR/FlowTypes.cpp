@@ -8,6 +8,7 @@
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 
 // clang-format off: must be included after all LLVM/MLIR headers.
@@ -18,10 +19,7 @@
 #include "iree/compiler/Dialect/Flow/IR/FlowTypes.cpp.inc" // IWYU pragma: keep
 // clang-format on
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace Flow {
+namespace mlir::iree_compiler::IREE::Flow {
 
 //===----------------------------------------------------------------------===//
 // !flow.dispatch.tensor
@@ -222,7 +220,60 @@ void FlowDialect::printType(Type type, DialectAsmPrinter &p) const {
   }
 }
 
-} // namespace Flow
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+std::optional<IREE::Flow::CollectiveElementType>
+convertToFlowCollectiveElementType(Type type) {
+  if (type.isa<FloatType>()) {
+    if (type.isF16()) {
+      return IREE::Flow::CollectiveElementType::Float16;
+    }
+    if (type.isBF16()) {
+      return IREE::Flow::CollectiveElementType::BFloat16;
+    }
+    if (type.isF32()) {
+      return IREE::Flow::CollectiveElementType::Float32;
+    }
+    if (type.isF64()) {
+      return IREE::Flow::CollectiveElementType::Float64;
+    }
+  } else if (type.isa<IntegerType>()) {
+    if (type.isInteger(8)) {
+      if (type.isSignedInteger()) {
+        return IREE::Flow::CollectiveElementType::Sint8;
+      }
+      return IREE::Flow::CollectiveElementType::Uint8;
+    }
+    if (type.isInteger(16)) {
+      if (type.isSignedInteger()) {
+        return IREE::Flow::CollectiveElementType::Sint16;
+      }
+      return IREE::Flow::CollectiveElementType::Uint16;
+    }
+    if (type.isInteger(32)) {
+      if (type.isSignedInteger()) {
+        return IREE::Flow::CollectiveElementType::Sint32;
+      }
+      return IREE::Flow::CollectiveElementType::Uint32;
+    }
+    if (type.isInteger(64)) {
+      if (type.isSignedInteger()) {
+        return IREE::Flow::CollectiveElementType::Sint64;
+      }
+      return IREE::Flow::CollectiveElementType::Uint64;
+    }
+  }
+
+  return std::nullopt;
+}
+
+IREE::Flow::CollectiveElementTypeAttr
+getCollectiveElementTypeAttr(RankedTensorType type) {
+  std::optional<IREE::Flow::CollectiveElementType> collectiveElemType =
+      convertToFlowCollectiveElementType(type.getElementType());
+  if (!collectiveElemType) {
+    return IREE::Flow::CollectiveElementTypeAttr();
+  }
+  return IREE::Flow::CollectiveElementTypeAttr::get(type.getContext(),
+                                                    *collectiveElemType);
+}
+
+} // namespace mlir::iree_compiler::IREE::Flow

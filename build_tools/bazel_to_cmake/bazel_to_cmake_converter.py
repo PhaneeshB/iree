@@ -130,20 +130,20 @@ class BuildFileFunctions(object):
         # ':') or in other packages (leading '//'). We map that to paths by:
         # - dropping any leading ':' as in:
         #      ':generated.c' -> 'generated.c'
-        # - replacing any leading '//' by '${CMAKE_SOURCE_DIR}/' or
-        #   '${CMAKE_BINARY_DIR}/' and any internal ':' by '/', as in:
+        # - replacing any leading '//' by '${PROJECT_SOURCE_DIR}/' or
+        #   '${PROJECT_BINARY_DIR}/' and any internal ':' by '/', as in:
         #      '//path/to/package:source.c'
-        #      -> '${CMAKE_SOURCE_DIR}/path/to/package/source.c'
+        #      -> '${PROJECT_SOURCE_DIR}/path/to/package/source.c'
         #      '//path/to/package:generated.c'
-        #      -> '${CMAKE_BINARY_DIR}/path/to/package/generated.c'
+        #      -> '${PROJECT_BINARY_DIR}/path/to/package/generated.c'
         pkg_root_relative_label = src.startswith("//")
         src = src.lstrip("/").lstrip(":").replace(":", "/")
         if not pkg_root_relative_label:
             return src
         elif os.path.exists(os.path.join(self._build_dir, src)):
-            return f"${{CMAKE_SOURCE_DIR}}/{src}"
+            return f"${{PROJECT_SOURCE_DIR}}/{src}"
         else:
-            return f"${{CMAKE_BINARY_DIR}}/{src}"
+            return f"${{PROJECT_BINARY_DIR}}/{src}"
 
     def _convert_srcs_block(self, srcs, is_generated=False, block_name="SRCS"):
         if not srcs:
@@ -394,6 +394,7 @@ class BuildFileFunctions(object):
         testonly=None,
         linkopts=None,
         includes=None,
+        system_includes=None,
         **kwargs,
     ):
         if self._should_skip_target(**kwargs):
@@ -412,6 +413,9 @@ class BuildFileFunctions(object):
         deps_block = self._convert_target_list_block("DEPS", deps)
         testonly_block = self._convert_option_block("TESTONLY", testonly)
         includes_block = self._convert_includes_block(includes)
+        system_includes_block = self._convert_string_list_block(
+            "SYSTEM_INCLUDES", system_includes
+        )
 
         self._converter.body += (
             f"iree_cc_library(\n"
@@ -425,6 +429,7 @@ class BuildFileFunctions(object):
             f"{defines_block}"
             f"{testonly_block}"
             f"{includes_block}"
+            f"{system_includes_block}"
             f"  PUBLIC\n)\n\n"
         )
 
@@ -802,6 +807,7 @@ class BuildFileFunctions(object):
         srcs,
         target_backends_and_drivers=None,
         compiler_flags=None,
+        input_type=None,
         runner_args=None,
         tags=None,
         target_cpu_features_variants=None,
@@ -825,6 +831,7 @@ class BuildFileFunctions(object):
         compiler_flags_block = self._convert_string_list_block(
             "COMPILER_FLAGS", compiler_flags
         )
+        input_type_block = self._convert_string_arg_block("INPUT_TYPE", input_type)
         runner_args_block = self._convert_string_list_block("RUNNER_ARGS", runner_args)
         labels_block = self._convert_string_list_block("LABELS", tags)
         target_cpu_features_variants_block = self._convert_string_list_block(
@@ -839,6 +846,7 @@ class BuildFileFunctions(object):
             f"{target_backends_block}"
             f"{drivers_block}"
             f"{compiler_flags_block}"
+            f"{input_type_block}"
             f"{runner_args_block}"
             f"{labels_block}"
             f"{target_cpu_features_variants_block}"
@@ -846,12 +854,12 @@ class BuildFileFunctions(object):
             f")\n\n"
         )
 
-    def iree_generated_trace_runner_test(
+    def iree_generated_e2e_matmul_test(
         self,
         name,
         generator,
         generator_args=None,
-        trace_runner=None,
+        test_runner=None,
         target_backends_and_drivers=None,
         compiler_flags=None,
         runner_args=None,
@@ -877,7 +885,7 @@ class BuildFileFunctions(object):
         generator_args_block = self._convert_string_list_block(
             "GENERATOR_ARGS", generator_args
         )
-        trace_runner_block = self._convert_target_block("TRACE_RUNNER", trace_runner)
+        test_runner_block = self._convert_target_block("TEST_RUNNER", test_runner)
         target_backends_block = self._convert_string_list_block(
             "TARGET_BACKENDS", target_backends
         )
@@ -892,11 +900,11 @@ class BuildFileFunctions(object):
         )
 
         self._converter.body += (
-            f"iree_generated_trace_runner_test(\n"
+            f"iree_generated_e2e_matmul_test(\n"
             f"{name_block}"
             f"{generator_block}"
             f"{generator_args_block}"
-            f"{trace_runner_block}"
+            f"{test_runner_block}"
             f"{target_backends_block}"
             f"{drivers_block}"
             f"{compiler_flags_block}"

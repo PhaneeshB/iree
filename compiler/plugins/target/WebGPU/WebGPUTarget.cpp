@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "./SPIRVToWGSL.h"
-#include "iree/compiler/Codegen/Dialect/IREECodegenDialect.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenDialect.h"
 #include "iree/compiler/Codegen/SPIRV/Passes.h"
 #include "iree/compiler/Codegen/WGSL/Passes.h"
 #include "iree/compiler/Dialect/HAL/Target/TargetRegistry.h"
@@ -17,6 +17,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/ToolOutputFile.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVOps.h"
@@ -25,10 +26,7 @@
 #include "mlir/Target/SPIRV/Serialization.h"
 #include "spirv-tools/libspirv.hpp"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace HAL {
+namespace mlir::iree_compiler::IREE::HAL {
 
 namespace {
 
@@ -58,7 +56,7 @@ static spirv::TargetEnvAttr getWebGPUTargetEnv(MLIRContext *context) {
 
 class WebGPUTargetBackend : public TargetBackend {
 public:
-  WebGPUTargetBackend(WebGPUOptions options) : options_(std::move(options)) {}
+  WebGPUTargetBackend(const WebGPUOptions &options) : options(options) {}
 
   // NOTE: we could vary this based on the options such as 'webgpu-v2'.
   std::string name() const override { return "webgpu"; }
@@ -76,10 +74,6 @@ public:
   getDefaultDeviceTarget(MLIRContext *context) const override {
     Builder b(context);
     SmallVector<NamedAttribute> configItems;
-
-    // Indicates that the runtime HAL driver operates only in the legacy
-    // synchronous mode.
-    configItems.emplace_back(b.getStringAttr("legacy_sync"), b.getUnitAttr());
 
     configItems.emplace_back(b.getStringAttr("executable_targets"),
                              getExecutableTargets(context));
@@ -132,7 +126,7 @@ public:
         spirv::createSPIRVWebGPUPreparePass());
   }
 
-  LogicalResult serializeExecutable(const SerializationOptions &options,
+  LogicalResult serializeExecutable(const SerializationOptions &serOptions,
                                     IREE::HAL::ExecutableVariantOp variantOp,
                                     OpBuilder &executableBuilder) override {
     ModuleOp innerModuleOp = variantOp.getInnerModule();
@@ -144,11 +138,11 @@ public:
     }
 
     auto spvModuleOp = *spirvModuleOps.begin();
-    if (!options.dumpIntermediatesPath.empty()) {
+    if (!serOptions.dumpIntermediatesPath.empty()) {
       std::string assembly;
       llvm::raw_string_ostream os(assembly);
       spvModuleOp.print(os, OpPrintingFlags().useLocalScope());
-      dumpDataToPath(options.dumpIntermediatesPath, options.dumpBaseName,
+      dumpDataToPath(serOptions.dumpIntermediatesPath, serOptions.dumpBaseName,
                      variantOp.getName(), ".mlir", assembly);
     }
 
@@ -182,17 +176,17 @@ public:
 
     // Serialize the spirv::ModuleOp into binary format.
     SmallVector<uint32_t, 0> spvBinary;
-    spirv::SerializationOptions serializationOptions;
-    serializationOptions.emitSymbolName = options_.debugSymbols;
-    serializationOptions.emitDebugInfo = options_.debugSymbols;
-    if (failed(
-            spirv::serialize(spvModuleOp, spvBinary, serializationOptions)) ||
+    spirv::SerializationOptions spirvSerializationOptions;
+    spirvSerializationOptions.emitSymbolName = options.debugSymbols;
+    spirvSerializationOptions.emitDebugInfo = options.debugSymbols;
+    if (failed(spirv::serialize(spvModuleOp, spvBinary,
+                                spirvSerializationOptions)) ||
         spvBinary.empty()) {
       return variantOp.emitError() << "failed to serialize spirv.module";
     }
-    if (!options.dumpIntermediatesPath.empty()) {
-      dumpDataToPath<uint32_t>(options.dumpIntermediatesPath,
-                               options.dumpBaseName, variantOp.getName(),
+    if (!serOptions.dumpIntermediatesPath.empty()) {
+      dumpDataToPath<uint32_t>(serOptions.dumpIntermediatesPath,
+                               serOptions.dumpBaseName, variantOp.getName(),
                                ".spv", spvBinary);
 
       // Disassemble the shader and save that too.
@@ -204,8 +198,9 @@ public:
               spvBinary.data(), spvBinary.size(), &spvDisassembled,
               SPV_BINARY_TO_TEXT_OPTION_INDENT |
                   SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES)) {
-        dumpDataToPath(options.dumpIntermediatesPath, options.dumpBaseName,
-                       variantOp.getName(), ".spvasm", spvDisassembled);
+        dumpDataToPath(serOptions.dumpIntermediatesPath,
+                       serOptions.dumpBaseName, variantOp.getName(), ".spvasm",
+                       spvDisassembled);
       } else {
         llvm::errs() << "Failed to disassemble SPIR-V binary\n";
       }
@@ -222,8 +217,8 @@ public:
              << "failed to compile SPIR-V to WGSL. Consider inspecting the "
                 "shader program using -iree-hal-dump-executable-intermediates.";
     }
-    if (!options.dumpBinariesPath.empty()) {
-      dumpDataToPath(options.dumpBinariesPath, options.dumpBaseName,
+    if (!serOptions.dumpBinariesPath.empty()) {
+      dumpDataToPath(serOptions.dumpBinariesPath, serOptions.dumpBaseName,
                      variantOp.getName(), ".wgsl", wgsl.value());
     }
 
@@ -283,7 +278,7 @@ private:
         configAttr);
   }
 
-  WebGPUOptions options_;
+  const WebGPUOptions &options;
 };
 
 struct WebGPUSession
@@ -302,10 +297,7 @@ struct WebGPUSession
 
 } // namespace
 
-} // namespace HAL
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::HAL
 
 IREE_DEFINE_COMPILER_OPTION_FLAGS(
     mlir::iree_compiler::IREE::HAL::WebGPUOptions);

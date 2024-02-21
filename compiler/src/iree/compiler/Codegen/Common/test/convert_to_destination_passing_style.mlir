@@ -1,4 +1,4 @@
-// RUN: iree-opt %s --iree-codegen-convert-to-destination-passing-style --canonicalize -cse --split-input-file | FileCheck %s
+// RUN: iree-opt %s --pass-pipeline="builtin.module(func.func(iree-codegen-convert-to-destination-passing-style),canonicalize,cse)" --split-input-file | FileCheck %s
 
 func.func @matmul() {
   %m = hal.interface.constant.load[0] : index
@@ -304,8 +304,8 @@ func.func @cast_followed_by_store() {
         %7 = flow.dispatch.tensor.load %0, offsets = [%arg0, %arg1, 0], sizes = [%c1, %c32, 1024], strides = [1, 1, 1] : !flow.dispatch.tensor<readonly:tensor<4x32x1024xf32>> -> tensor<?x?x1024xf32>
         %8 = flow.dispatch.tensor.load %1, offsets = [%arg0, 0, %arg2], sizes = [%c1, 1024, %c32], strides = [1, 1, 1] : !flow.dispatch.tensor<readonly:tensor<4x1024x64xf32>> -> tensor<?x1024x?xf32>
         %9 = tensor.empty() : tensor<1x32x32xf32>
-        %10 = linalg.fill  {__internal_linalg_transform__ = "workgroup"} ins(%cst : f32) outs(%9 : tensor<1x32x32xf32>) -> tensor<1x32x32xf32>
-        %11 = linalg.batch_matmul {__internal_linalg_transform__ = "workgroup", is_root_op} ins(%7, %8 : tensor<?x?x1024xf32>, tensor<?x1024x?xf32>) outs(%10 : tensor<1x32x32xf32>) -> tensor<1x32x32xf32>
+        %10 = linalg.fill ins(%cst : f32) outs(%9 : tensor<1x32x32xf32>) -> tensor<1x32x32xf32>
+        %11 = linalg.batch_matmul ins(%7, %8 : tensor<?x?x1024xf32>, tensor<?x1024x?xf32>) outs(%10 : tensor<1x32x32xf32>) -> tensor<1x32x32xf32>
         %12 = tensor.cast %11 : tensor<1x32x32xf32> to tensor<?x?x?xf32>
         flow.dispatch.tensor.store %12, %2, offsets = [%arg0, %arg1, %arg2], sizes = [%c1, %c32, %c32], strides = [1, 1, 1] : tensor<?x?x?xf32> -> !flow.dispatch.tensor<writeonly:tensor<4x32x64xf32>>
       }
@@ -547,7 +547,7 @@ func.func @linalg_ext_reverse_dim0() {
       %7 = tensor.empty() : tensor<2x3xf32>
       %8 = iree_linalg_ext.reverse dimensions(dense<0> : tensor<1xi64>) ins(%6 : tensor<2x3xf32>) outs(%7 : tensor<2x3xf32>) : tensor<2x3xf32>
       %9 = affine.apply affine_map<()[s0] -> (-s0)>()[%arg0]
-      flow.dispatch.tensor.store %8, %1, offsets = [%9, %arg1], sizes = [%c2, %c3], strides = [%c1, %c1] : tensor<2x3xf32> -> !flow.dispatch.tensor<writeonly:tensor<2x3xf32>>
+      flow.dispatch.tensor.store %8, %1, offsets = [%9, %arg1], sizes = [2, 3], strides = [%c1, %c1] : tensor<2x3xf32> -> !flow.dispatch.tensor<writeonly:tensor<2x3xf32>>
     }
   }
   return
@@ -746,12 +746,15 @@ func.func @unpack() {
 
 // -----
 
+#map = affine_map<(d0, d1, d2) -> (d0, d2)>
+#map1 = affine_map<(d0, d1, d2) -> (d2, d1)>
+#map2 = affine_map<(d0, d1, d2) -> (d0, d1)>
 func.func @non_perfect_tiling_unpack() {
   %c1 = arith.constant 1 : index
   %c512 = arith.constant 512 : index
   %c0 = arith.constant 0 : index
   %c16 = arith.constant 16 : index
-  %0:2 = iree_codegen.query_tile_sizes tensor<16x16xi32, #iree_linalg_ext.encoding<user = MATMUL, role = RESULT, element_types = [i8, i8, i32]>> -> index, index
+  %0:2 = iree_codegen.query_tile_sizes tensor<16x16xi32, #iree_linalg_ext.encoding<role = RESULT, element_types = [i8, i8, i32], user_indexing_maps = [#map, #map1, #map2]>> -> index, index
   %1 = affine.apply affine_map<()[s0] -> (16 ceildiv s0)>()[%0#0]
   %2 = affine.apply affine_map<()[s0] -> (16 ceildiv s0)>()[%0#1]
   %3 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c512) flags(ReadOnly) : !flow.dispatch.tensor<readonly:tensor<?x?x?x?xi32>>{%1, %2, %0#0, %0#1}

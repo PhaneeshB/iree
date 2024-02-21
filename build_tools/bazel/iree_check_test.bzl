@@ -41,8 +41,8 @@ def iree_check_test(
       input_type: Value to pass to --iree-input-type.
       runner_args: additional runner_args to pass to iree-check-module. The
           driver and input file are passed automatically.
-      tags: additional tags to apply to the generated test. A tag
-          "driver=DRIVER" is added automatically.
+      tags: additional tags to apply to the generated test. Tag
+          "driver=DRIVER" and "target=TARGET" are added automatically.
       target_cpu_features: currently unimplemented (must be empty), will
           eventually allow specifying target CPU features.
       timeout: timeout for the generated tests.
@@ -62,6 +62,7 @@ def iree_check_test(
         name = bytecode_module_name,
         src = src,
         flags = flags,
+        tags = ["target=%s" % target_backend],
         visibility = ["//visibility:private"],
     )
 
@@ -76,7 +77,7 @@ def iree_check_test(
         ] + runner_args,
         data = [":%s" % bytecode_module_name],
         src = "//tools:iree-check-module",
-        tags = tags + ["driver=%s" % driver],
+        tags = tags + ["driver=%s" % driver, "target=%s" % target_backend],
         timeout = timeout,
         **kwargs
     )
@@ -151,9 +152,7 @@ def iree_check_single_backend_test_suite(
     native.test_suite(
         name = name,
         tests = tests,
-        # Note that only the manual tag really has any effect here. Others are
-        # used for test suite filtering, but all tests are passed the same tags.
-        tags = tags,
+        tags = tags + ["driver=%s" % driver, "target=%s" % target_backend],
         # If there are kwargs that need to be passed here which only apply to
         # the generated tests and not to test_suite, they should be extracted
         # into separate named arguments.
@@ -165,6 +164,7 @@ def iree_check_test_suite(
         srcs,
         target_backends_and_drivers = ALL_TARGET_BACKENDS_AND_DRIVERS,
         compiler_flags = [],
+        input_type = None,
         runner_args = [],
         tags = [],
         target_cpu_features_variants = [],
@@ -180,6 +180,7 @@ def iree_check_test_suite(
           module, respectively.
       compiler_flags: additional flags to pass to the compiler. Bytecode output
           format and backend flags are passed automatically.
+      input_type: Value to pass to --iree-input-type.
       runner_args: additional runner_args to pass to the underlying
           iree-check-module tests. The driver and input file are passed
           automatically. To use different runner_args per test, create a
@@ -216,6 +217,7 @@ def iree_check_test_suite(
             driver = driver,
             target_backend = backend,
             compiler_flags = compiler_flags,
+            input_type = input_type,
             runner_args = runner_args,
             tags = tags,
             **kwargs

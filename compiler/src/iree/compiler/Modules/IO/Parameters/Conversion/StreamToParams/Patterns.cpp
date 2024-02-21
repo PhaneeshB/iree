@@ -15,7 +15,7 @@
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "iree/compiler/Modules/IO/Parameters/IR/IOParametersOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 namespace mlir::iree_compiler {
@@ -40,7 +40,7 @@ struct ParameterLoadOpPattern
 
     // Derive the allocation requirements.
     auto resourceType =
-        llvm::cast<IREE::Stream::ResourceType>(loadOp.getResult().getType());
+        cast<IREE::Stream::ResourceType>(loadOp.getResults().front().getType());
     auto memoryTypes = IREE::HAL::MemoryTypeBitfield::None;
     auto bufferUsage = IREE::HAL::BufferUsageBitfield::None;
     if (failed(deriveAllowedResourceBufferBits(loc, resourceType, memoryTypes,
@@ -49,13 +49,18 @@ struct ParameterLoadOpPattern
     }
 
     // Queue operation, which acts like an allocation.
-    Value result = rewriter.create<IREE::IO::Parameters::LoadOp>(
-        loc, rewriter.getType<IREE::HAL::BufferType>(), device, queueAffinity,
-        waitFence, signalFence, adaptor.getSourceScopeAttr(),
-        adaptor.getSourceKeyAttr(), adaptor.getSourceOffset(), memoryTypes,
-        bufferUsage, adaptor.getResultSize());
+    SmallVector<Type> newResultTypes(loadOp.getResults().size(),
+                                     rewriter.getType<IREE::HAL::BufferType>());
+    auto newOp = rewriter.create<IREE::IO::Parameters::LoadOp>(
+        loc, newResultTypes, device, queueAffinity, waitFence, signalFence,
+        adaptor.getSourceScopeAttr(), adaptor.getSourceKeysAttr(),
+        adaptor.getSourceOffsets(), memoryTypes, bufferUsage,
+        adaptor.getResultSizes());
 
-    rewriter.replaceOp(loadOp, {result, signalFence});
+    SmallVector<Value> resultReplacements;
+    llvm::append_range(resultReplacements, newOp.getResults());
+    resultReplacements.push_back(signalFence);
+    rewriter.replaceOp(loadOp, resultReplacements);
     return success();
   }
 };

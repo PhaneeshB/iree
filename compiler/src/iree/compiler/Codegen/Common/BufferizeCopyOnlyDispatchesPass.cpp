@@ -21,13 +21,13 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/ViewLikeInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -53,7 +53,7 @@ void BufferizeCopyOnlyDispatchesPass::runOnOperation() {
   ModuleOp module = getOperation();
 
   SmallVector<Operation *> copyOnlyFunctions;
-  auto funcOps = module.getOps<func::FuncOp>();
+  auto funcOps = module.getOps<mlir::FunctionOpInterface>();
   for (auto funcOp : funcOps) {
     /// Check if the dispatch has all sources for `flow.dispatch.tensor.store`
     /// operations coming from `flow.dispatch.tensor.load` operations. If so,
@@ -125,5 +125,4 @@ createBufferizeCopyOnlyDispatchesPass() {
   return std::make_unique<BufferizeCopyOnlyDispatchesPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

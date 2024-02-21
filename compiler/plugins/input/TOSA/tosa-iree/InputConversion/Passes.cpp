@@ -9,6 +9,7 @@
 #include "iree/compiler/InputConversion/Common/Passes.h"
 #include "mlir/Conversion/TosaToArith/TosaToArith.h"
 #include "mlir/Conversion/TosaToLinalg/TosaToLinalg.h"
+#include "mlir/Conversion/TosaToMLProgram/TosaToMLProgram.h"
 #include "mlir/Conversion/TosaToSCF/TosaToSCF.h"
 #include "mlir/Conversion/TosaToTensor/TosaToTensor.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -18,8 +19,7 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 void registerTOSAConversionPassPipeline() {
   PassPipelineRegistration<> tosa(
@@ -32,6 +32,7 @@ void registerTOSAConversionPassPipeline() {
 
 // Prepare TOSA for use as an input to the Flow dialect.
 void buildTOSAInputConversionPassPipeline(OpPassManager &passManager) {
+  passManager.addPass(mlir::createTosaToMLProgram());
   // Currently we don't handle SCF ops well and have to convert them all to CFG.
   // In the future it would be nice if we could have all of flow be both scf
   // and cfg compatible.
@@ -89,5 +90,4 @@ void registerTOSAConversionPasses() {
   registerTOSAConversionPassPipeline();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

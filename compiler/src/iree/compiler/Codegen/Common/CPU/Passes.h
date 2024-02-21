@@ -13,17 +13,17 @@
 #define IREE_COMPILER_CODEGEN_COMMON_CPU_PASSES_H_
 
 #include "iree/compiler/Dialect/HAL/IR/HALTypes.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 /// Convert encoding-specific operations based on target attributes. Examples:
 ///   linalg_ext.set_encoding   -> tensor.pack
 ///   linalg_ext.unset_encoding -> tensor.unpack
 ///   linalg.matmul             -> linalg.mmt4d
-std::unique_ptr<OperationPass<func::FuncOp>> createCPUMaterializeEncodingPass(
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createCPUMaterializeEncodingPass(
     IREE::HAL::ExecutableTargetAttr targetAttr = nullptr);
 
 /// Like createLLVMCPUMaterializeEncodingPass, but specifically for
@@ -55,7 +55,6 @@ createCPULowerToUKernelsPass(bool skipIntermediateRoundings = true);
 
 void registerCodegenCommonCPUPasses();
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler
 
 #endif // IREE_COMPILER_CODEGEN_COMMON_CPU_PASSES_H_

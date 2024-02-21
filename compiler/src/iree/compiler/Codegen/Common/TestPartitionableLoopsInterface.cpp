@@ -9,13 +9,11 @@
 #include "iree/compiler/Codegen/Interfaces/PartitionableLoopsInterface.h"
 #include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 static const char kAttributeName[] = "__test_interface__";
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
@@ -41,8 +39,8 @@ struct TestPartitionableLoopsInterfacePattern
     auto constantAttr = DenseIntElementsAttr::get(type, partitionableLoops);
     rewriter.create<IREE::Util::UnfoldableConstantOp>(interfaceOp.getLoc(),
                                                       constantAttr);
-    rewriter.updateRootInPlace(
-        interfaceOp, [&] { interfaceOp->removeAttr(kAttributeName); });
+    rewriter.modifyOpInPlace(interfaceOp,
+                             [&] { interfaceOp->removeAttr(kAttributeName); });
     return success();
   }
 };
@@ -71,5 +69,4 @@ createTestPartitionableLoopsInterfacePass() {
   return std::make_unique<TestPartitionableLoopsInterfacePass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

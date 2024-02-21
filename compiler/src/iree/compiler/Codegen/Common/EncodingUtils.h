@@ -9,10 +9,10 @@
 
 #include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtOps.h"
 #include "iree/compiler/Dialect/HAL/IR/HALTypes.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 /// Container of information needed to materialize the pack operation.
 struct MaterializeEncodingInfo {
@@ -77,17 +77,27 @@ protected:
 /// Otherwise, returns null.
 IREE::LinalgExt::EncodingAttr getEncodingAttr(RankedTensorType type);
 
+/// Get the permutation that permutes the input shape to the canonical
+/// matmul input shape based on the IndexingMaps encoding attribute.
+std::optional<SmallVector<int64_t>>
+getPermutationToCanonicalMatmulShape(IREE::LinalgExt::EncodingAttr encoding);
+
+/// Returns a RankedTensorType that has been transposed into the canonical
+/// form for an ordinary matmul/batch_matmul op.
+RankedTensorType getCanonicalMatmulTypeWithEncoding(RankedTensorType type);
+
+/// Returns the ContractionDimensions for the encoding user_indexing_maps.
+FailureOr<linalg::ContractionDimensions>
+getEncodingContractionDims(IREE::LinalgExt::EncodingAttr encoding);
+
 /// Returns the original type that carried by encoding.
 RankedTensorType getOriginalTypeWithEncoding(RankedTensorType type);
 
 /// Returns the RankedTensorType without encodings.
 RankedTensorType dropEncoding(RankedTensorType type);
 
-/// Returns true if encoding user is one of matmul encodings.
-bool isMatmulEncodingUser(IREE::LinalgExt::EncodingUser user);
-
-/// Returns if encoding user is one of batch matmul encodings.
-bool isBatchMatmulEncodingUser(IREE::LinalgExt::EncodingUser user);
+/// Returns the integer contained in an IntegerAttr, or zero if it has none.
+int64_t getIntOrZero(IntegerAttr a);
 
 struct TileMxNxK {
   int64_t M = 1;
@@ -96,12 +106,8 @@ struct TileMxNxK {
 };
 
 MaterializeEncodingInfo
-getEncodingInfoForMatmul(IREE::LinalgExt::EncodingUser user,
-                         IREE::LinalgExt::EncodingRole role,
+getEncodingInfoForMatmul(IREE::LinalgExt::EncodingAttr encoding, int64_t rank,
                          TileMxNxK tileMxNxK);
-
-MaterializeEncodingValueFn
-getMaterializeEncodingValueFn(IREE::HAL::ExecutableTargetAttr targetAttr);
 
 void populateMaterializeEncodingIntoPackUnPackPatterns(
     RewritePatternSet &patterns, MaterializeEncodingConversionTarget &target,
@@ -111,6 +117,6 @@ void populateMaterializeEncodingIntoPackUnPackPatterns(
 void populateMaterializeUpperBoundTileSizePatterns(
     RewritePatternSet &patterns, MaterializeEncodingFn materializeEncodingFn);
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler
+
 #endif // IREE_COMPILER_SRC_IREE_COMPILER_CODEGEN_COMMON_ENCODINGUTILS_H_

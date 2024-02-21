@@ -10,15 +10,14 @@
 #include "iree/compiler/Dialect/VM/Conversion/UtilToVM/ConvertUtilToVM.h"
 #include "iree/compiler/Dialect/VM/IR/VMOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/DialectConversion.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
+
 namespace {
 
 static Value castToI64(Value value, OpBuilder &builder) {
@@ -318,6 +317,22 @@ struct BufferStoreOpConversion
   }
 };
 
+struct BufferHashOpConversion
+    : public OpConversionPattern<IREE::Util::BufferHashOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(IREE::Util::BufferHashOp hashOp, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto newType =
+        getTypeConverter()->convertType(hashOp.getResult().getType());
+    auto byteOffset = castToI64(adaptor.getSourceOffset(), rewriter);
+    auto length = castToI64(adaptor.getLength(), rewriter);
+    rewriter.replaceOpWithNewOp<IREE::VM::BufferHashOp>(
+        hashOp, newType, adaptor.getSource(), byteOffset, length);
+    return success();
+  }
+};
+
 } // namespace
 
 void populateUtilBufferToVMPatterns(MLIRContext *context,
@@ -341,7 +356,8 @@ void populateUtilBufferToVMPatterns(MLIRContext *context,
                     IREE::Util::BufferDeallocOp, IREE::Util::BufferSliceOp,
                     IREE::Util::BufferSizeOp, IREE::Util::BufferCopyOp,
                     IREE::Util::BufferCompareOp, IREE::Util::BufferFillOp,
-                    IREE::Util::BufferLoadOp, IREE::Util::BufferStoreOp>();
+                    IREE::Util::BufferLoadOp, IREE::Util::BufferStoreOp,
+                    IREE::Util::BufferHashOp>();
 
   patterns.insert<BufferConstantOpConversion>(typeConverter, context);
   patterns.insert<BufferAllocOpConversion>(typeConverter, context);
@@ -353,7 +369,7 @@ void populateUtilBufferToVMPatterns(MLIRContext *context,
   patterns.insert<BufferFillOpConversion>(typeConverter, context);
   patterns.insert<BufferLoadOpConversion>(typeConverter, context);
   patterns.insert<BufferStoreOpConversion>(typeConverter, context);
+  patterns.insert<BufferHashOpConversion>(typeConverter, context);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

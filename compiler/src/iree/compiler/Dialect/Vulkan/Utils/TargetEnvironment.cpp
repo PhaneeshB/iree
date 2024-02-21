@@ -6,18 +6,17 @@
 
 #include "iree/compiler/Dialect/Vulkan/Utils/TargetEnvironment.h"
 
+#include "iree/compiler/Dialect/Vulkan/IR/VulkanTypes.h"
 #include "iree/compiler/Dialect/Vulkan/Utils/TargetTriple.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVEnums.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVTypes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace Vulkan {
+namespace mlir::iree_compiler::IREE::Vulkan {
 
 namespace {
+
 /// Gets the corresponding SPIR-V version for the ggiven Vulkan target
 /// environment.
 spirv::Version convertVersion(Vulkan::TargetEnvAttr vkTargetEnv) {
@@ -78,6 +77,8 @@ void convertExtensions(Vulkan::TargetEnvAttr vkTargetEnv,
     case Extension::VK_KHR_cooperative_matrix:
       extensions.push_back(spirv::Extension::SPV_KHR_cooperative_matrix);
       break;
+    case Extension::VK_KHR_buffer_device_address:
+      extensions.push_back(spirv::Extension::SPV_KHR_physical_storage_buffer);
     }
   }
 }
@@ -137,7 +138,9 @@ void convertCapabilities(Vulkan::TargetEnvAttr vkTargetEnv,
   MAP_SUBGROUP_FEATURE(Quad);
   MAP_SUBGROUP_FEATURE(PartitionedNV);
 #undef MAP_SUBGROUP_FEATURE
-
+  if (vkCapabilities.getPhysicalDeviceBufferAddresses()) {
+    capabilities.push_back(spirv::Capability::PhysicalStorageBufferAddresses);
+  }
   if (vkCapabilities.getVariablePointers()) {
     capabilities.push_back(spirv::Capability::VariablePointers);
   }
@@ -189,7 +192,8 @@ convertResourceLimits(Vulkan::TargetEnvAttr vkTargetEnv) {
       vkCapabilities.getMinSubgroupSize(), vkCapabilities.getMaxSubgroupSize(),
       ArrayAttr::get(context, khrCoopAttrs), ArrayAttr{});
 }
-} // anonymous namespace
+
+} // namespace
 
 Vulkan::TargetEnvAttr getTargetEnvForTriple(MLIRContext *context,
                                             llvm::StringRef triple) {
@@ -214,7 +218,4 @@ spirv::TargetEnvAttr convertTargetEnv(Vulkan::TargetEnvAttr vkTargetEnv) {
       vkTargetEnv.getDeviceType(), vkTargetEnv.getDeviceID());
 }
 
-} // namespace Vulkan
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::Vulkan

@@ -20,7 +20,6 @@
 #include "experimental/webgpu/simple_allocator.h"
 #include "experimental/webgpu/staging_buffer.h"
 #include "iree/base/internal/arena.h"
-#include "iree/hal/utils/buffer_transfer.h"
 #include "iree/hal/utils/file_transfer.h"
 #include "iree/hal/utils/memory_file.h"
 
@@ -213,9 +212,14 @@ static iree_status_t iree_hal_webgpu_device_trim(
 static iree_status_t iree_hal_webgpu_device_query_i64(
     iree_hal_device_t* base_device, iree_string_view_t category,
     iree_string_view_t key, int64_t* out_value) {
-  // iree_hal_webgpu_device_t* device =
-  // iree_hal_webgpu_device_cast(base_device);
+  iree_hal_webgpu_device_t* device = iree_hal_webgpu_device_cast(base_device);
   *out_value = 0;
+
+  if (iree_string_view_equal(category, IREE_SV("hal.device.id"))) {
+    *out_value =
+        iree_string_view_match_pattern(device->identifier, key) ? 1 : 0;
+    return iree_ok_status();
+  }
 
   if (iree_string_view_equal(category,
                              iree_make_cstring_view("hal.executable.format"))) {
@@ -463,7 +467,6 @@ const iree_hal_device_vtable_t iree_hal_webgpu_device_vtable = {
     .create_semaphore = iree_hal_webgpu_device_create_semaphore,
     .query_semaphore_compatibility =
         iree_hal_webgpu_device_query_semaphore_compatibility,
-    .transfer_range = iree_hal_device_submit_transfer_range_and_wait,
     .queue_alloca = iree_hal_webgpu_device_queue_alloca,
     .queue_dealloca = iree_hal_webgpu_device_queue_dealloca,
     .queue_read = iree_hal_webgpu_device_queue_read,

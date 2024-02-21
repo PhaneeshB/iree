@@ -25,9 +25,9 @@ iree_lit_test_suite(
     "iree-dump-parameters.txt"
     "iree-run-mlir.mlir"
     "iree-run-module-expected.mlir"
+    "iree-run-module-inputs.mlir"
     "iree-run-module-outputs.mlir"
     "iree-run-module.mlir"
-    "iree-run-trace.mlir"
     "multiple_args.mlir"
     "multiple_exported_functions.mlir"
     "null_values.mlir"
@@ -39,22 +39,18 @@ iree_lit_test_suite(
     ${IREE_LLD_TARGET}
     FileCheck
     iree-benchmark-module
-    iree-benchmark-trace
     iree-compile
     iree-dump-parameters
     iree-opt
     iree-run-mlir
     iree-run-module
-    iree-run-trace
     not
   DATA
     echo_npy.py
-    iree-run-trace.yml
     parameters_a.safetensors
     parameters_b.safetensors
   LABELS
     "driver=local-task"
-    "driver=vulkan"
     "hostonly"
 )
 
@@ -83,9 +79,9 @@ if(IREE_BUILD_TESTS AND
       "local-sync"
     RUNNER_ARGS
       "--function=abs"
-      "--input=f32=-10"
+      "--input=2xf32=-10 -5"
     EXPECTED_OUTPUT
-      "f32=10"
+      "2xf32=10 5"
     DEPS
       iree_tools_test_iree_run_module_bytecode_module_vmvx
   )

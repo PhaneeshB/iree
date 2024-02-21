@@ -1,21 +1,20 @@
 // RUN: iree-opt --split-input-file --canonicalize %s | iree-opt --split-input-file | FileCheck %s
 
 // CHECK-LABEL: @skip_command_buffer_device
-func.func @skip_command_buffer_device() -> !hal.executable {
-  // CHECK: %[[DEVICE:.+]] = hal.ex.shared_device
-  %dev = hal.ex.shared_device : !hal.device
-  %cmd = hal.command_buffer.create device(%dev : !hal.device)
+// CHECK-SAME: (%[[DEVICE:.+]]: !hal.device)
+util.func public @skip_command_buffer_device(%device: !hal.device) -> !hal.executable {
+  %cmd = hal.command_buffer.create device(%device : !hal.device)
                                      mode(OneShot)
-                                     categories("Transfer|Dispatch") : !hal.command_buffer
+                               categories("Transfer|Dispatch") : !hal.command_buffer
 
   // CHECK-NOT: hal.command_buffer.device
   //      CHECK: = hal.executable.lookup device(%[[DEVICE]] : !hal.device)
   // CHECK-SAME:     executable(@executable_name) : !hal.executable
-  %0 = hal.command_buffer.device<%cmd : !hal.command_buffer> : !hal.device
-  %exe = hal.executable.lookup device(%dev : !hal.device)
+  %device2 = hal.command_buffer.device<%cmd : !hal.command_buffer> : !hal.device
+  %exe = hal.executable.lookup device(%device2 : !hal.device)
                            executable(@executable_name) : !hal.executable
 
-  return %exe : !hal.executable
+  util.return %exe : !hal.executable
 }
 
 // -----
@@ -23,7 +22,7 @@ func.func @skip_command_buffer_device() -> !hal.executable {
 // CHECK-LABEL: @fold_buffer_subspan_into_fill_buffer
 //  CHECK-SAME: %[[CMD:.+]]: !hal.command_buffer,
 //  CHECK-SAME: %[[BASE_BUFFER:.+]]: !hal.buffer
-func.func @fold_buffer_subspan_into_fill_buffer(
+util.func public @fold_buffer_subspan_into_fill_buffer(
     %cmd: !hal.command_buffer,
     %buffer: !hal.buffer
   ) {
@@ -38,7 +37,7 @@ func.func @fold_buffer_subspan_into_fill_buffer(
       // CHECK-SAME: target(%[[BASE_BUFFER]] : !hal.buffer)[%c108192, %c8192]
       target(%target_subspan : !hal.buffer)[%c100000, %c8192]
       pattern(%c1234_i32 : i32)
-  return
+  util.return
 }
 
 // -----
@@ -46,7 +45,7 @@ func.func @fold_buffer_subspan_into_fill_buffer(
 // CHECK-LABEL: @fold_buffer_subspan_into_copy_buffer
 //  CHECK-SAME: %[[CMD:.+]]: !hal.command_buffer,
 //  CHECK-SAME: %[[BASE_BUFFER:.+]]: !hal.buffer
-func.func @fold_buffer_subspan_into_copy_buffer(
+util.func public @fold_buffer_subspan_into_copy_buffer(
     %cmd: !hal.command_buffer,
     %buffer: !hal.buffer
   ) {
@@ -64,7 +63,7 @@ func.func @fold_buffer_subspan_into_copy_buffer(
       // CHECK-SAME: target(%[[BASE_BUFFER]] : !hal.buffer)[%c108192]
       target(%target_subspan : !hal.buffer)[%c100000]
       length(%c8192)
-  return
+  util.return
 }
 
 // -----
@@ -73,7 +72,7 @@ func.func @fold_buffer_subspan_into_copy_buffer(
 //  CHECK-SAME: %[[CMD:.+]]: !hal.command_buffer,
 //  CHECK-SAME: %[[LAYOUT:.+]]: !hal.pipeline_layout,
 //  CHECK-SAME: %[[BASE_BUFFER:.+]]: !hal.buffer
-func.func @fold_buffer_subspan_into_push_descriptor_set(
+util.func public @fold_buffer_subspan_into_push_descriptor_set(
     %cmd: !hal.command_buffer,
     %layout: !hal.pipeline_layout,
     %buffer: !hal.buffer
@@ -102,5 +101,5 @@ func.func @fold_buffer_subspan_into_push_descriptor_set(
         // CHECK-NEXT: %c2 = (%[[BASE_BUFFER]] : !hal.buffer)[%c4096, %c262144]
         %c2 = (%buffer : !hal.buffer)[%c4096, %c262144]
       ])
-  return
+  util.return
 }

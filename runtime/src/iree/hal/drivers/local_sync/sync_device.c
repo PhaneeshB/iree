@@ -18,7 +18,6 @@
 #include "iree/hal/local/inline_command_buffer.h"
 #include "iree/hal/local/local_executable_cache.h"
 #include "iree/hal/local/local_pipeline_layout.h"
-#include "iree/hal/utils/buffer_transfer.h"
 #include "iree/hal/utils/deferred_command_buffer.h"
 #include "iree/hal/utils/file_transfer.h"
 #include "iree/hal/utils/memory_file.h"
@@ -186,6 +185,12 @@ static iree_status_t iree_hal_sync_device_query_i64(
   iree_hal_sync_device_t* device = iree_hal_sync_device_cast(base_device);
   *out_value = 0;
 
+  if (iree_string_view_equal(category, IREE_SV("hal.device.id"))) {
+    *out_value =
+        iree_string_view_match_pattern(device->identifier, key) ? 1 : 0;
+    return iree_ok_status();
+  }
+
   if (iree_string_view_equal(category, IREE_SV("hal.executable.format"))) {
     *out_value =
         iree_hal_query_any_executable_loader_support(
@@ -193,7 +198,9 @@ static iree_status_t iree_hal_sync_device_query_i64(
             ? 1
             : 0;
     return iree_ok_status();
-  } else if (iree_string_view_equal(category, IREE_SV("hal.device"))) {
+  }
+
+  if (iree_string_view_equal(category, IREE_SV("hal.device"))) {
     if (iree_string_view_equal(key, IREE_SV("concurrency"))) {
       *out_value = 1;
       return iree_ok_status();
@@ -507,7 +514,6 @@ static const iree_hal_device_vtable_t iree_hal_sync_device_vtable = {
     .create_semaphore = iree_hal_sync_device_create_semaphore,
     .query_semaphore_compatibility =
         iree_hal_sync_device_query_semaphore_compatibility,
-    .transfer_range = iree_hal_device_transfer_mappable_range,
     .queue_alloca = iree_hal_sync_device_queue_alloca,
     .queue_dealloca = iree_hal_sync_device_queue_dealloca,
     .queue_read = iree_hal_sync_device_queue_read,

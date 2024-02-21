@@ -6,8 +6,7 @@
 
 #include "iree/compiler/Codegen/Common/GPU/PassDetail.h"
 #include "iree/compiler/Codegen/Common/GPU/Passes.h"
-#include "iree/compiler/Codegen/Dialect/IREECodegenAttrs.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenAttrs.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -15,12 +14,11 @@
 
 #define DEBUG_TYPE "iree-codegen-gpu-tile-reduction"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 namespace {
 
-static LogicalResult tileReduction(linalg::GenericOp op) {
+static LogicalResult tileReduction(linalg::LinalgOp op) {
   SmallVector<unsigned> dims;
   op.getReductionDims(dims);
   SmallVector<int64_t> tileSize = getTileSizes(op, 1);
@@ -44,7 +42,7 @@ static LogicalResult tileReduction(linalg::GenericOp op) {
   return success();
 }
 
-static LogicalResult tileFusedOps(linalg::GenericOp op) {
+static LogicalResult tileFusedOps(linalg::LinalgOp op) {
   IRRewriter rewriter(op.getContext());
   rewriter.setInsertionPoint(op);
   SmallVector<int64_t> tileSizes = getTileSizes(op, 1);
@@ -67,15 +65,15 @@ struct GPUTileReductionPass
   }
 
   void runOnOperation() override {
-    func::FuncOp funcOp = getOperation();
-    SmallVector<linalg::GenericOp> genericOps;
-    funcOp.walk([&](linalg::GenericOp op) { genericOps.push_back(op); });
-    for (linalg::GenericOp op : genericOps) {
+    auto funcOp = getOperation();
+    SmallVector<linalg::LinalgOp> linalgOps;
+    funcOp.walk([&](linalg::LinalgOp op) { linalgOps.push_back(op); });
+    for (linalg::LinalgOp op : linalgOps) {
       if (op.getNumReductionLoops() > 0) {
         if (failed(tileReduction(op))) {
           return signalPassFailure();
         }
-      } else {
+      } else if (isa<linalg::GenericOp>(op)) {
         if (failed(tileFusedOps(op))) {
           return signalPassFailure();
         }
@@ -85,9 +83,9 @@ struct GPUTileReductionPass
 };
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> createGPUTileReductionPass() {
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createGPUTileReductionPass() {
   return std::make_unique<GPUTileReductionPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

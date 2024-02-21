@@ -24,8 +24,7 @@
 //   https://reviews.llvm.org/D117021
 // Once it lands, this pattern can be replaced.
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 /// Gets the given `attrOrValue` as an index value by creating constant ops
 /// for attributes.
@@ -256,9 +255,9 @@ void populateVectorizePadPatterns(RewritePatternSet &patterns,
   patterns.add<VectorizePadWithConditions>(patterns.getContext(), baseBenefit);
 }
 
-std::unique_ptr<OperationPass<func::FuncOp>> createVectorizePadPass() {
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createVectorizePadPass() {
   return std::make_unique<TensorToVectorVectorizePadPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

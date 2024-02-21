@@ -15,12 +15,10 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace VM {
+namespace mlir::iree_compiler::IREE::VM {
 
 // TODO(benvanik): replace this entire pass with generic IPO - the rodata refs
 // are kind of constant like and should be trivial to inline, though they can't
@@ -130,8 +128,8 @@ public:
     auto moduleOp = getOperation();
 
     Explorer explorer(moduleOp, TraversalAction::SHALLOW);
-    explorer.setOpAction<IREE::VM::InitializerOp>(TraversalAction::RECURSE);
-    explorer.setOpAction<IREE::VM::FuncOp>(TraversalAction::RECURSE);
+    explorer.setOpInterfaceAction<mlir::FunctionOpInterface>(
+        TraversalAction::RECURSE);
     explorer.initialize();
 
     // Walk all !vm.buffer globals and process them (if possible).
@@ -160,7 +158,4 @@ createResolveRodataLoadsPass() {
 
 static PassRegistration<ResolveRodataLoadsPass> pass;
 
-} // namespace VM
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::VM

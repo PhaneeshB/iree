@@ -60,11 +60,11 @@ hal.executable @copy_op_dynamic {
         %o1 = hal.interface.constant.load[5] : index
         %source = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) : memref<?x?xi32>{%d0, %d1}
         %dest = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : memref<?x?xi32>{%d2, %d3}
-        %dest_view = memref.subview %dest[%o0, %o1] [%d0, %d1] [1, 1] : memref<?x?xi32> to memref<?x?xi32, strided<[?, ?], offset : ?>>
+        %dest_view = memref.subview %dest[%o0, %o1] [%d0, %d1] [1, 1] : memref<?x?xi32> to memref<?x?xi32, strided<[?, 1], offset : ?>>
         linalg.generic {
             indexing_maps = [affine_map<(d0, d1) -> (d0, d1)> , affine_map<(d0, d1) -> (d0, d1)>],
             iterator_types = ["parallel", "parallel"]}
-            ins(%source : memref<?x?xi32>) outs(%dest_view : memref<?x?xi32, strided<[?, ?], offset : ?>>) {
+            ins(%source : memref<?x?xi32>) outs(%dest_view : memref<?x?xi32, strided<[?, 1], offset : ?>>) {
           ^bb0(%arg0 : i32, %arg1 : i32):
             linalg.yield %arg0 : i32
           }
@@ -101,7 +101,7 @@ hal.executable private @static_1d_fft_stage2  {
         %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) : !flow.dispatch.tensor<readwrite:tensor<32xf32>>
         %2 = flow.dispatch.tensor.load %0, offsets = [0], sizes = [32], strides = [1] : !flow.dispatch.tensor<readwrite:tensor<32xf32>> -> tensor<32xf32>
         %3 = flow.dispatch.tensor.load %1, offsets = [0], sizes = [32], strides = [1] : !flow.dispatch.tensor<readwrite:tensor<32xf32>> -> tensor<32xf32>
-        %4:2 = iree_linalg_ext.fft {__internal_linalg_transform__ = "workgroup"} ins(%c2, %cst, %cst_0 : index, tensor<2xf32>, tensor<2xf32>) outs(%2, %3 : tensor<32xf32>, tensor<32xf32>) : tensor<32xf32>, tensor<32xf32>
+        %4:2 = iree_linalg_ext.fft ins(%c2, %cst, %cst_0 : index, tensor<2xf32>, tensor<2xf32>) outs(%2, %3 : tensor<32xf32>, tensor<32xf32>) : tensor<32xf32>, tensor<32xf32>
         flow.dispatch.tensor.store %4#0, %0, offsets = [0], sizes = [32], strides = [1] : tensor<32xf32> -> !flow.dispatch.tensor<readwrite:tensor<32xf32>>
         flow.dispatch.tensor.store %4#1, %1, offsets = [0], sizes = [32], strides = [1] : tensor<32xf32> -> !flow.dispatch.tensor<readwrite:tensor<32xf32>>
         return
@@ -240,7 +240,7 @@ hal.executable private @elem_pack_ukernels  {
         %cst = arith.constant 0.000000e+00 : f32
         %c0 = arith.constant 0 : index
         %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : !flow.dispatch.tensor<readonly:tensor<1024x2048xf32>>
-        %1:2 = iree_codegen.query_tile_sizes tensor<1024x2048xf32, #iree_linalg_ext.encoding<user =  MATMUL, role =  LHS, element_types = [f32, f32, f32], original_type = tensor<1024x2048xf32>>> -> index, index
+        %1:2 = iree_codegen.query_tile_sizes tensor<1024x2048xf32, #iree_linalg_ext.encoding<role =  LHS, element_types = [f32, f32, f32], original_type = tensor<1024x2048xf32>>> -> index, index
         %2 = affine.apply affine_map<()[s0] -> (1024 ceildiv s0)>()[%1#0]
         %3 = affine.apply affine_map<()[s0] -> (2048 ceildiv s0)>()[%1#1]
         %4 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) : !flow.dispatch.tensor<writeonly:tensor<?x?x?x?xf32>>{%2, %3, %1#0, %1#1}
@@ -251,12 +251,12 @@ hal.executable private @elem_pack_ukernels  {
           %15 = arith.addf %in, %in : f32
           linalg.yield %15 : f32
         } -> tensor<1024x2048xf32>
-        %8:2 = iree_codegen.query_tile_sizes tensor<?x?xf32, #iree_linalg_ext.encoding<user =  MATMUL, role =  LHS, element_types = [f32, f32, f32], original_type = tensor<1024x2048xf32>>> -> index, index
+        %8:2 = iree_codegen.query_tile_sizes tensor<?x?xf32, #iree_linalg_ext.encoding<role =  LHS, element_types = [f32, f32, f32], original_type = tensor<1024x2048xf32>>> -> index, index
         %9 = affine.apply affine_map<()[s0] -> (1024 ceildiv s0)>()[%8#0]
         %10 = affine.apply affine_map<()[s0] -> (2048 ceildiv s0)>()[%8#1]
         %11 = tensor.empty(%9, %10, %8#0, %8#1) : tensor<?x?x?x?xf32>
         %pack = tensor.pack %7 padding_value(%cst : f32) inner_dims_pos = [0, 1] inner_tiles = [%8#0, %8#1] into %11 : tensor<1024x2048xf32> -> tensor<?x?x?x?xf32>
-        %12:2 = iree_codegen.query_tile_sizes tensor<1024x2048xf32, #iree_linalg_ext.encoding<user =  MATMUL, role =  LHS, element_types = [f32, f32, f32], original_type = tensor<1024x2048xf32>>> -> index, index
+        %12:2 = iree_codegen.query_tile_sizes tensor<1024x2048xf32, #iree_linalg_ext.encoding<role =  LHS, element_types = [f32, f32, f32], original_type = tensor<1024x2048xf32>>> -> index, index
         %13 = affine.apply affine_map<()[s0] -> (1024 ceildiv s0)>()[%12#0]
         %14 = affine.apply affine_map<()[s0] -> (2048 ceildiv s0)>()[%12#1]
         flow.dispatch.tensor.store %pack, %4, offsets = [0, 0, 0, 0], sizes = [%13, %14, %12#0, %12#1], strides = [1, 1, 1, 1] : tensor<?x?x?x?xf32> -> !flow.dispatch.tensor<writeonly:tensor<?x?x?x?xf32>>{%13, %14, %12#0, %12#1}
@@ -271,3 +271,34 @@ hal.executable private @elem_pack_ukernels  {
 // CHECK-SAME:     translation_info = #[[TRANSLATION]]
 //      CHECK:   linalg.generic
 // CHECK-SAME:       lowering_config = #[[CONFIG]]
+
+// -----
+
+hal.executable private @copy_cst {
+  hal.executable.variant public @vmvx_bytecode_fb target(<"vmvx", "vmvx-bytecode-fb", {ukernels = "none"}>) {
+    hal.executable.export public @copy_cst ordinal(0) layout(#hal.pipeline.layout<push_constants = 10, sets = [<0, bindings = [<0, storage_buffer>]>]>) {
+    ^bb0(%arg0: !hal.device, %arg1: index, %arg2: index, %arg3: index, %arg4: index):
+      %x, %y, %z = flow.dispatch.workgroup_count_from_slice %arg1, %arg2, %arg3, %arg4
+      hal.return %x, %y, %z : index, index, index
+    }
+    builtin.module {
+      func.func @copy_cst() {
+        %cst = arith.constant dense<4.200000e-01> : tensor<5x19x8x4xf32>
+        %c32_i64 = arith.constant 32 : i64
+        %0 = hal.interface.constant.load[0] : i32
+        %1 = hal.interface.constant.load[1] : i32
+        %2 = arith.extui %0 : i32 to i64
+        %3 = arith.extui %1 : i32 to i64
+        %4 = arith.shli %3, %c32_i64 : i64
+        %5 = arith.ori %2, %4 : i64
+        %6 = arith.index_castui %5 : i64 to index
+        %7 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%6) : !flow.dispatch.tensor<writeonly:tensor<5x19x8x4xf32>>
+        flow.dispatch.tensor.store %cst, %7, offsets = [0, 0, 0, 0], sizes = [5, 19, 8, 4], strides = [1, 1, 1, 1] : tensor<5x19x8x4xf32> -> !flow.dispatch.tensor<writeonly:tensor<5x19x8x4xf32>>
+        return
+      }
+    }
+  }
+}
+//  CHECK-DAG: #[[TRANSLATION:.+]] = #iree_codegen.translation_info<VMVXDefault>
+//      CHECK: hal.executable.export public @copy_cst
+// CHECK-SAME:     translation_info = #[[TRANSLATION]]

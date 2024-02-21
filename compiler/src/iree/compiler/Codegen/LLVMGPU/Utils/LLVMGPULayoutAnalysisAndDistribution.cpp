@@ -7,7 +7,6 @@
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -301,8 +300,7 @@ static void propagateLayoutToReduceBroadcastTranspose(
   auto reductionDims =
       llvm::to_vector(reductionOp.getReductionDims().getAsRange<IntegerAttr>());
   // Get the transpose permutation
-  SmallVector<int64_t> perm;
-  transposeOp.getTransp(perm);
+  ArrayRef<int64_t> perm = transposeOp.getPermutation();
   // Don't support dim-1 broadcasted dims
   llvm::SetVector<int64_t> dimOneBroadcastedDims =
       broadcastOp.computeBroadcastedUnitDims();
@@ -882,9 +880,10 @@ static void distributeReductionBroadcastTranspose(
         if (index)
           return;
       }
-      result = !result ? tmp
-                       : makeArithReduction(rewriter, loc, combiningKind,
-                                            result, tmp, mask);
+      result = !result
+                   ? tmp
+                   : makeArithReduction(rewriter, loc, combiningKind, result,
+                                        tmp, /*fastmath=*/nullptr, mask);
     };
     iterate(0, reductionOrder, state, layout, reduceLocal);
 
@@ -897,7 +896,7 @@ static void distributeReductionBroadcastTranspose(
             unpackToVector(loc, rewriter, shuffleOp.getShuffleResult(),
                            llvm::cast<VectorType>(result.getType()));
         result = makeArithReduction(rewriter, loc, combiningKind, unpacked,
-                                    result, mask);
+                                    result, /*fastmath=*/nullptr, mask);
       }
 
       // Convert to f16 or f32
@@ -905,13 +904,14 @@ static void distributeReductionBroadcastTranspose(
                                                     SmallVector<int64_t>{0});
       if (isFP32) {
         result = makeArithReduction(rewriter, loc, combiningKind, v0, accValue,
-                                    mask);
+                                    /*fastmath=*/nullptr, mask);
       } else {
         Value v1 = rewriter.create<vector::ExtractOp>(loc, result,
                                                       SmallVector<int64_t>{1});
-        result = makeArithReduction(rewriter, loc, combiningKind, v0, v1, mask);
+        result = makeArithReduction(rewriter, loc, combiningKind, v0, v1,
+                                    /*fastmath=*/nullptr, mask);
         result = makeArithReduction(rewriter, loc, combiningKind, result,
-                                    accValue, mask);
+                                    accValue, /*fastmath=*/nullptr, mask);
       }
     };
     reduceGlobal();
@@ -1267,7 +1267,9 @@ static void collectOperations(Operation *rootOp,
 static bool isMatmulTransposeB(vector::ContractionOp contractOp) {
   // Set up the parallel/reduction structure in right form.
   using MapList = ArrayRef<ArrayRef<AffineExpr>>;
-  auto infer = [](MapList m) { return AffineMap::inferFromExprList(m); };
+  auto infer = [&](MapList m) {
+    return AffineMap::inferFromExprList(m, contractOp.getContext());
+  };
   AffineExpr m, n, k;
   bindDims(contractOp.getContext(), m, n, k);
   auto iteratorTypes = contractOp.getIteratorTypes().getValue();
@@ -1280,7 +1282,7 @@ static bool isMatmulTransposeB(vector::ContractionOp contractOp) {
 }
 
 void doLayoutAnalysisAndDistribution(RewriterBase &rewriter,
-                                     func::FuncOp funcOp) {
+                                     mlir::FunctionOpInterface funcOp) {
   // First walk through all the MMA ops and set their layouts
   DenseMap<Value, Layout> layoutMap;
   funcOp.walk([&](Operation *op) {

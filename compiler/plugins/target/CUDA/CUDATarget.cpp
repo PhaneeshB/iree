@@ -4,8 +4,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "./LLVMPasses.h"
-#include "iree/compiler/Codegen/Dialect/IREECodegenDialect.h"
+#include "./SetBlockIdsRangePass.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenDialect.h"
 #include "iree/compiler/Codegen/LLVMGPU/Passes.h"
 #include "iree/compiler/Dialect/HAL/Target/LLVMLinkerUtils.h"
 #include "iree/compiler/Dialect/HAL/Target/TargetRegistry.h"
@@ -30,7 +30,6 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/WithColor.h"
@@ -49,10 +48,7 @@
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace HAL {
+namespace mlir::iree_compiler::IREE::HAL {
 
 namespace {
 struct CUDAOptions {
@@ -62,7 +58,6 @@ struct CUDAOptions {
   bool clUsePtxas = false;
   std::string clUsePtxasFrom;
   std::string clUsePtxasParams;
-  bool enableLegacySync = true;
 
   void bindOptions(OptionsBinder &binder) {
     static llvm::cl::OptionCategory category("CUDA HAL Target");
@@ -105,12 +100,6 @@ struct CUDAOptions {
         "iree-hal-cuda-use-ptxas-params", clUsePtxasParams,
         llvm::cl::cat(category),
         llvm::cl::desc("Passes the given additional parameters to ptxas."));
-
-    binder.opt<bool>(
-        "iree-hal-cuda-enable-legacy-sync", enableLegacySync,
-        llvm::cl::cat(category),
-        llvm::cl::desc(
-            "Enable legacy sync mode that handles semaphores synchronously."));
   }
 };
 } // namespace
@@ -395,12 +384,6 @@ public:
     Builder b(context);
     SmallVector<NamedAttribute> configItems;
 
-    // Indicates that the runtime HAL driver operates only in the legacy
-    // synchronous mode.
-    if (options.enableLegacySync) {
-      configItems.emplace_back(b.getStringAttr("legacy_sync"), b.getUnitAttr());
-    }
-
     configItems.emplace_back(b.getStringAttr("executable_targets"),
                              getExecutableTargets(context));
 
@@ -505,14 +488,6 @@ public:
       }
     } else {
       ModuleOp innerModuleOp = variantOp.getInnerModule();
-
-      // Remove all the functions that are not part of the CUDA kernel.
-      // TODO(thomasraoux): remove this? this should not be required.
-      auto illegalFuncOps =
-          llvm::to_vector<4>(innerModuleOp.getOps<func::FuncOp>());
-      for (auto funcOp : illegalFuncOps) {
-        funcOp.erase();
-      }
 
       auto llvmModule =
           mlir::translateModuleToLLVMIR(innerModuleOp, context, libraryName);
@@ -709,12 +684,10 @@ struct CUDASession
     });
   }
 };
+
 } // namespace
 
-} // namespace HAL
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::HAL
 
 extern "C" bool iree_register_compiler_plugin_hal_target_cuda(
     mlir::iree_compiler::PluginRegistrar *registrar) {

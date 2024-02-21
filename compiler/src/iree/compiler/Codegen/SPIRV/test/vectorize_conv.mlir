@@ -1,5 +1,5 @@
 // RUN: iree-opt --split-input-file \
-// RUN:   --pass-pipeline='builtin.module(func.func(iree-codegen-generic-vectorization,iree-spirv-initial-vector-lowering,iree-codegen-hoist-redundant-vector-transfers,iree-spirv-final-vector-lowering))' \
+// RUN:   --pass-pipeline='builtin.module(func.func(iree-codegen-generic-vectorization,iree-spirv-initial-vector-lowering,iree-codegen-optimize-tensor-insert-extract-slices,iree-spirv-final-vector-lowering))' \
 // RUN:   %s | FileCheck %s
 
 func.func @ncw_conv_1d(%input: tensor<2x4x4xf32>, %filter: tensor<4x4x1xf32>, %init: tensor<2x4x4xf32>) -> tensor<2x4x4xf32> {
@@ -49,12 +49,12 @@ func.func @nwc_conv_1d_dot_prod(%input: tensor<1x7x3xi8>, %filter: tensor<1x3x4x
 
 //          CHECK:   %[[LHS:.+]] = spirv.CompositeConstruct %{{.+}}, %[[ZERO]] : (vector<3xi8>, i8) -> vector<4xi8>
 //          CHECK:   %[[RHS:.+]] = spirv.CompositeConstruct %{{.+}}, %[[ZERO]] : (vector<3xi8>, i8) -> vector<4xi8>
-//          CHECK:   spirv.SDotAccSat %[[LHS]], %[[RHS]], %{{.+}} : (vector<4xi8>, vector<4xi8>, i32) -> i32
+//          CHECK:   spirv.SDotAccSat %[[LHS]], %[[RHS]], %{{.+}} : vector<4xi8> -> i32
 //  CHECK-COUNT-2:   spirv.CompositeConstruct %{{.+}}, %[[ZERO]] : (vector<3xi8>, i8) -> vector<4xi8>
-//          CHECK:   spirv.SDotAccSat %{{.+}}, %{{.+}}, %{{.+}} : (vector<4xi8>, vector<4xi8>, i32) -> i32
+//          CHECK:   spirv.SDotAccSat %{{.+}}, %{{.+}}, %{{.+}} : vector<4xi8> -> i32
 //  CHECK-COUNT-2:   spirv.CompositeConstruct %{{.+}}, %[[ZERO]] : (vector<3xi8>, i8) -> vector<4xi8>
-//          CHECK:   spirv.SDotAccSat %{{.+}}, %{{.+}}, %{{.+}} : (vector<4xi8>, vector<4xi8>, i32) -> i32
+//          CHECK:   spirv.SDotAccSat %{{.+}}, %{{.+}}, %{{.+}} : vector<4xi8> -> i32
 //  CHECK-COUNT-2:   spirv.CompositeConstruct %{{.+}}, %[[ZERO]] : (vector<3xi8>, i8) -> vector<4xi8>
-//          CHECK:   spirv.SDotAccSat %{{.+}}, %{{.+}}, %{{.+}} : (vector<4xi8>, vector<4xi8>, i32) -> i32
+//          CHECK:   spirv.SDotAccSat %{{.+}}, %{{.+}}, %{{.+}} : vector<4xi8> -> i32
 
-// CHECK-COUNT-12:   spirv.SDotAccSat {{.+}} : (vector<4xi8>, vector<4xi8>, i32) -> i32
+// CHECK-COUNT-12:   spirv.SDotAccSat {{.+}} : vector<4xi8> -> i32

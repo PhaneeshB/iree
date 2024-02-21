@@ -13,6 +13,7 @@
 #include "iree/compiler/Utils/IndexSet.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "stablehlo-iree/Conversion/Rewriters.h"
@@ -44,55 +45,6 @@ namespace {
 // mode combinations for cross-replica and cross partition communication. See
 // the stablehlo specification for more details about the different modes.
 
-static std::optional<IREE::Flow::CollectiveElementType>
-convertToFlowCollectiveElementType(Type type) {
-  if (type.isF32()) {
-    return IREE::Flow::CollectiveElementType::Float32;
-  }
-
-  if (type.isInteger(32)) {
-    if (type.isSignedInteger()) {
-      return IREE::Flow::CollectiveElementType::Sint32;
-    }
-    return IREE::Flow::CollectiveElementType::Uint32;
-  }
-
-  if (type.isF16()) {
-    return IREE::Flow::CollectiveElementType::Float16;
-  }
-
-  if (type.isInteger(8)) {
-    if (type.isSignedInteger()) {
-      return IREE::Flow::CollectiveElementType::Sint8;
-    }
-    return IREE::Flow::CollectiveElementType::Uint8;
-  }
-
-  if (type.isInteger(16)) {
-    if (type.isSignedInteger()) {
-      return IREE::Flow::CollectiveElementType::Sint16;
-    }
-    return IREE::Flow::CollectiveElementType::Uint16;
-  }
-
-  if (type.isBF16()) {
-    return IREE::Flow::CollectiveElementType::BFloat16;
-  }
-
-  if (type.isF64()) {
-    return IREE::Flow::CollectiveElementType::Float64;
-  }
-
-  if (type.isInteger(64)) {
-    if (type.isSignedInteger()) {
-      return IREE::Flow::CollectiveElementType::Sint64;
-    }
-    return IREE::Flow::CollectiveElementType::Uint64;
-  }
-
-  return std::nullopt;
-}
-
 static std::optional<IREE::Flow::CollectiveReductionOp>
 convertToFlowCollectiveReductionOp(const Operation &op) {
   if (isa<mlir::stablehlo::AddOp>(op)) {
@@ -110,17 +62,6 @@ convertToFlowCollectiveReductionOp(const Operation &op) {
   // TODO: we may be able to detect an average operation and convert it
   // into IREE::Flow::CollectiveReductionOp::ReductionAverage.
   return std::nullopt;
-}
-
-static IREE::Flow::CollectiveElementTypeAttr
-getCollectiveElementTypeAttr(MLIRContext *context, RankedTensorType type) {
-  std::optional<IREE::Flow::CollectiveElementType> collectiveElemType =
-      convertToFlowCollectiveElementType(type.getElementType());
-  if (!collectiveElemType) {
-    return IREE::Flow::CollectiveElementTypeAttr();
-  }
-  return IREE::Flow::CollectiveElementTypeAttr::get(context,
-                                                    *collectiveElemType);
 }
 
 template <typename T>
@@ -448,7 +389,7 @@ static Value emitTranspose(ConversionPatternRewriter &rewriter, Location loc,
       llvm::to_vector(llvm::seq<int64_t>(0, inputShape.size()));
   std::swap(permutation[srcDim], permutation[dstDim]);
   std::swap(inputShape[srcDim], inputShape[dstDim]);
-  DenseIntElementsAttr permutationAttr = rewriter.getI64VectorAttr(permutation);
+  auto permutationAttr = rewriter.getDenseI64ArrayAttr(permutation);
   return rewriter.create<mlir::stablehlo::TransposeOp>(
       loc, RankedTensorType::get(inputShape, inputType.getElementType()), input,
       permutationAttr);
@@ -552,7 +493,7 @@ struct AllGatherOpConversion final
     // Get the collective element type attribute.
     auto resultType = cast<RankedTensorType>(op.getResult().getType());
     IREE::Flow::CollectiveElementTypeAttr elementTypeAttr =
-        getCollectiveElementTypeAttr(op.getContext(), resultType);
+        IREE::Flow::getCollectiveElementTypeAttr(resultType);
     if (!elementTypeAttr) {
       return rewriter.notifyMatchFailure(
           op, "unsupported element type for collective op");
@@ -648,7 +589,7 @@ struct AllReduceOpConversion final
 
     // Get the collective element type attribute.
     IREE::Flow::CollectiveElementTypeAttr elementTypeAttr =
-        getCollectiveElementTypeAttr(op.getContext(), inputType);
+        IREE::Flow::getCollectiveElementTypeAttr(inputType);
     if (!elementTypeAttr) {
       return rewriter.notifyMatchFailure(op, "unsupported input type");
     }
@@ -705,7 +646,7 @@ Value splitAndConcatForAllToAll(ConversionPatternRewriter &rewriter,
   result = rewriter.create<mlir::stablehlo::TransposeOp>(
       loc,
       RankedTensorType::get(transposeResultShape, inputType.getElementType()),
-      result, rewriter.getI64VectorAttr(permutation));
+      result, rewriter.getDenseI64ArrayAttr(permutation));
 
   // Reshape
   llvm::SmallVector<int64_t> finalShape(inputShape);
@@ -737,7 +678,7 @@ struct AllToAllOpConversion final
     // Get the collective element type attribute.
     auto resultType = cast<RankedTensorType>(op.getType());
     IREE::Flow::CollectiveElementTypeAttr elementTypeAttr =
-        getCollectiveElementTypeAttr(op.getContext(), resultType);
+        IREE::Flow::getCollectiveElementTypeAttr(resultType);
     if (!elementTypeAttr) {
       return rewriter.notifyMatchFailure(
           op, "unsupported element type for collective op");
@@ -841,7 +782,7 @@ struct ReduceScatterOpConversion final
     // Get the collective element type attribute.
     auto resultType = cast<RankedTensorType>(op.getResult().getType());
     IREE::Flow::CollectiveElementTypeAttr elementTypeAttr =
-        getCollectiveElementTypeAttr(op.getContext(), resultType);
+        IREE::Flow::getCollectiveElementTypeAttr(resultType);
     if (!elementTypeAttr) {
       return rewriter.notifyMatchFailure(op, "unsupported input type");
     }
@@ -852,7 +793,7 @@ struct ReduceScatterOpConversion final
     auto inputType = cast<RankedTensorType>(op.getOperand().getType());
     SmallVector<int64_t> reduceInputShape(inputType.getShape());
     Value reduceInput = adaptor.getOperand();
-    DenseIntElementsAttr permutationAttr;
+    DenseI64ArrayAttr permutationAttr;
 
     SmallVector<int64_t> scatterResultShape(resultType.getShape());
     auto elemType = getElementTypeOrSelf(reduceInput.getType());
@@ -861,7 +802,7 @@ struct ReduceScatterOpConversion final
       auto permutation =
           llvm::to_vector(llvm::seq<int64_t>(0, scatterResultShape.size()));
       std::swap(permutation[0], permutation[scatterDim]);
-      permutationAttr = rewriter.getI64VectorAttr(permutation);
+      permutationAttr = rewriter.getDenseI64ArrayAttr(permutation);
       std::swap(reduceInputShape[0], reduceInputShape[scatterDim]);
       std::swap(scatterResultShape[0], scatterResultShape[scatterDim]);
       // Transpose the input.
@@ -931,7 +872,7 @@ struct CollectivePermuteOpConversion
 
     // Get the collective element type attribute.
     IREE::Flow::CollectiveElementTypeAttr elementTypeAttr =
-        getCollectiveElementTypeAttr(op.getContext(), inputType);
+        IREE::Flow::getCollectiveElementTypeAttr(inputType);
     if (!elementTypeAttr) {
       return rewriter.notifyMatchFailure(op, "unsupported input type");
     }

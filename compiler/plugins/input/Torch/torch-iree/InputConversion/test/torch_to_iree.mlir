@@ -24,14 +24,14 @@ module {
     %6 = torch.aten.add.Tensor %3, %5, %int1_2 : !torch.vtensor<[128,30],f32>, !torch.vtensor<[30],f32>, !torch.int -> !torch.vtensor<[128,30],f32>
     return %6 : !torch.vtensor<[128,30],f32>
   }
-  util.global private @_params.classifier.weight {noinline} : tensor<30x20xf32>
-  util.global private @_params.classifier.bias {noinline} : tensor<30xf32>
+  util.global private @_params.classifier.weight {inlining_policy = #util.inline.never} : tensor<30x20xf32>
+  util.global private @_params.classifier.bias {inlining_policy = #util.inline.never} : tensor<30xf32>
 }
 
 // -----
 
 // Verify we can decompose complex ops
-// CHECK: func @main(%arg0: tensor<2x3x4xf32>) -> (tensor<2x3x4xf32>, tensor<2x3x4xf32>) 
+// CHECK: func @main(%arg0: tensor<2x3x4xf32>) -> (tensor<2x3x4xf32>, tensor<2x3x4xf32>)
 // CHECK: tensor.empty
 module {
   func.func @main(%arg0: !torch.vtensor<[2,3,4],f32>) -> (!torch.vtensor<[2,3,4],f32>, !torch.vtensor<[2,3,4],f32>) {

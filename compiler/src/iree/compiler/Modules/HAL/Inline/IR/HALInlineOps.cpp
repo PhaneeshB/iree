@@ -17,11 +17,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/TypeUtilities.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace HAL {
-namespace Inline {
+namespace mlir::iree_compiler::IREE::HAL::Inline {
 
 //===----------------------------------------------------------------------===//
 // hal_inline.buffer.allocate
@@ -174,7 +170,7 @@ struct FoldBufferViewCreateSubspan
     rewriter.restoreInsertionPoint(ip);
     if (!needsUpdate)
       return failure();
-    rewriter.updateRootInPlace(op, [&]() {
+    rewriter.modifyOpInPlace(op, [&]() {
       op.getSourceBufferMutable().assign(newSourceBuffer);
       op.getSourceOffsetMutable().assign(newSourceOffset);
     });
@@ -240,11 +236,7 @@ LogicalResult DeviceQueryOp::verify() {
   return success();
 }
 
-} // namespace Inline
-} // namespace HAL
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::HAL::Inline
 
 //===----------------------------------------------------------------------===//
 // TableGen definitions (intentionally last)

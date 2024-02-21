@@ -12,9 +12,10 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
+
 namespace {
+
 class EraseDeadAllocAndStoresPass
     : public EraseDeadAllocAndStoresBase<EraseDeadAllocAndStoresPass> {
 public:
@@ -31,12 +32,12 @@ void EraseDeadAllocAndStoresPass::runOnOperation() {
   IRRewriter rewriter(&getContext());
   memref::eraseDeadAllocAndStores(rewriter, funcOp);
 }
+
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createEraseDeadAllocAndStoresPass() {
   return std::make_unique<EraseDeadAllocAndStoresPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

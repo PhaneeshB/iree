@@ -19,8 +19,12 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/LoopInvariantCodeMotionUtils.h"
 
-namespace mlir {
-namespace iree_compiler {
+#define DEBUG_TYPE "iree-codegen-optimize-vector-transfer"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
+namespace mlir::iree_compiler {
+
 namespace {
 
 // Pattern to canonialize tranpose where only one dimension is not unit
@@ -47,7 +51,85 @@ public:
   }
 };
 
-static void loopInvariantCodeMotion(func::FuncOp funcOp) {
+// TODO: Move this upstream
+// Hoists a vector.bitcast op to the output of the enclosing scf.if
+//
+// This transforms IR like:
+//   %0 = scf.if %1 -> (vector<16xi8>) {
+//     %2 = memref.load %4[%c0] : memref<?xvector<4xi32>>
+//     %3 = vector.bitcast %2 : vector<4xi32> to vector<16xi8>
+//     scf.yield %3 : vector<16xi8>
+//   } else {
+//     scf.yield %cst : vector<16xi8>
+//   }
+// Into:
+//   %0 = scf.if %1 -> (vector<4xi32>) {
+//     %2 = memref.load %4[%c0] : memref<?xvector<4xi32>>
+//     scf.yield %2 : vector<4xi32>
+//   } else {
+//     %3 = vector.bitcast %cst : vector<16xi8> to vector<4xi32>
+//     scf.yield %0 : vector<4xi32>
+//   }
+//   %3 = vector.bitcast %0 : vector<4xi32> to vector<16xi8>
+struct BubbleUpBitCastOfScfIf : public OpRewritePattern<scf::IfOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(scf::IfOp ifOp,
+                                PatternRewriter &rewriter) const override {
+    // Bail on more than one result for now.
+    scf::YieldOp thenYield = ifOp.thenYield();
+    if (!thenYield || thenYield.getNumOperands() != 1)
+      return failure();
+    auto bitcastOp = thenYield.getOperand(0).getDefiningOp<vector::BitCastOp>();
+    // Bail out if no bitcast on the if then statement.
+    if (!bitcastOp)
+      return failure();
+
+    VectorType castSrcType = bitcastOp.getSourceVectorType();
+    VectorType castDstType = bitcastOp.getResultVectorType();
+    assert(castSrcType.getRank() == castDstType.getRank());
+    // Skip 0-D vector.
+    if (castSrcType.getRank() == 0)
+      return failure();
+
+    int64_t castSrcLastDim = castSrcType.getShape().back();
+    int64_t castDstLastDim = castDstType.getShape().back();
+    // Require casting to more elements;
+    if (castSrcLastDim > castDstLastDim)
+      return failure();
+
+    Location loc = ifOp.getLoc();
+
+    auto bitcastedIfOp =
+        rewriter.create<scf::IfOp>(loc, castSrcType, ifOp.getCondition());
+    bitcastedIfOp.getThenRegion().takeBody(ifOp.getThenRegion());
+    bitcastedIfOp.getElseRegion().takeBody(ifOp.getElseRegion());
+
+    scf::YieldOp newThenYield = bitcastedIfOp.thenYield();
+    auto newBitcastOp =
+        newThenYield.getOperand(0).getDefiningOp<vector::BitCastOp>();
+
+    newThenYield.setOperand(0, newBitcastOp.getSource());
+
+    auto newBitcast = rewriter.create<vector::BitCastOp>(
+        loc, castDstType, bitcastedIfOp.getResult(0));
+
+    scf::YieldOp elseYield = bitcastedIfOp.elseYield();
+    if (elseYield) {
+      OpBuilder::InsertionGuard elseGuard(rewriter);
+      rewriter.setInsertionPoint(elseYield);
+
+      Value yieldSrc = elseYield.getOperand(0);
+      auto elseBitcast =
+          rewriter.create<vector::BitCastOp>(loc, castSrcType, yieldSrc);
+      elseYield.setOperand(0, elseBitcast);
+    }
+    rewriter.replaceOp(ifOp, newBitcast);
+    return success();
+  }
+};
+
+static void loopInvariantCodeMotion(mlir::FunctionOpInterface funcOp) {
   // Walk through all loops in a function in innermost-loop-first order. This
   // way, we first LICM from the inner loop, and place the ops in
   // the outer loop, which in turn can be further LICM'ed.
@@ -60,7 +142,8 @@ struct OptimizeVectorTransferPass
   OptimizeVectorTransferPass(bool flatten, bool dropUnitDims)
       : flatten(flatten), dropUnitDims(dropUnitDims) {}
   void runOnOperation() override {
-    func::FuncOp funcOp = getOperation();
+    auto funcOp = getOperation();
+    LDBG("before optimize vector transfer\n" << funcOp);
     // Generate vector.shape_cast for dropping leading one dimensions in vector
     // ops. This increases the chance that we can forward more transfer writes
     // to transfer reads.
@@ -77,23 +160,30 @@ struct OptimizeVectorTransferPass
       }
     }
 
-    // Workaround, run loop invariant code motion before hoist redudant vector
+    LDBG("after dropping leading unit dims\n" << funcOp);
+
+    // Workaround, run loop invariant code motion before hoist redundant vector
     // transfer to workaround a bug upstream.
     // TODO(thomasraoux): Remove it once the fix is merged.
     loopInvariantCodeMotion(funcOp);
-    linalg::hoistRedundantVectorTransfers(funcOp);
+    linalg::hoistRedundantVectorTransfers(cast<func::FuncOp>(funcOp));
     IRRewriter rewriter(funcOp->getContext());
     vector::transferOpflowOpt(rewriter, funcOp);
+
+    LDBG("after folding redundant vector transfers\n" << funcOp);
 
     // Move bitcast inwards from loop region boundaries to increase chances to
     // cancel them.
     {
       RewritePatternSet patterns(&getContext());
       vector::populateBubbleVectorBitCastOpPatterns(patterns);
+      patterns.add<BubbleUpBitCastOfScfIf>(&getContext());
       if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
         return signalPassFailure();
       }
     }
+
+    LDBG("after bubbling vector bitcasts\n" << funcOp);
 
     // TODO(#14191): SPIR-V can't handle the vector.shape_cast created for
     // dropping unit dims so this option is disabled in SPIR-V pipeline.
@@ -104,6 +194,8 @@ struct OptimizeVectorTransferPass
       if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
         return signalPassFailure();
       }
+
+      LDBG("after dropping vector transfer unit dims\n" << funcOp);
     }
 
     // Second stage of patterns to flatten transfer ops.
@@ -114,9 +206,11 @@ struct OptimizeVectorTransferPass
         return signalPassFailure();
       }
     }
+    LDBG("after flattening vector transfers\n" << funcOp);
     // Delete potential dead alloc and associated ops after store to load
     // forwarding.
     memref::eraseDeadAllocAndStores(rewriter, funcOp);
+    LDBG("after erasing unused allocs and stores\n" << funcOp);
   }
 
   LogicalResult initializeOptions(StringRef options) override {
@@ -137,10 +231,9 @@ private:
 
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createOptimizeVectorTransferPass(bool flatten, bool dropUnitDims) {
   return std::make_unique<OptimizeVectorTransferPass>(flatten, dropUnitDims);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

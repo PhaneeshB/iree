@@ -561,8 +561,8 @@ Value mlir::iree_compiler::gpu::buildConvertToTensorCoreOp(
       transform::OperationType::get(b.getContext(), "scf.for"), funcH,
       b.getStrArrayAttr({scf::ForOp::getOperationName()}),
       /*matchInterfaceEnum=*/transform::MatchInterfaceEnumAttr(),
-      /*opAttrs=*/DictionaryAttr(),
-      /*filterResultType=*/TypeAttr());
+      /*opAttrs=*/DictionaryAttr(), /*filterResultType=*/TypeAttr(),
+      /*filterOperandTYpes=*/ArrayAttr());
   // TODO: At this time, this synchronization is needed for applying the
   // HoistRedundantVectorTransfersOp transform correctly. This is because the
   // transform does not take parallelism into accound.
@@ -573,8 +573,7 @@ Value mlir::iree_compiler::gpu::buildConvertToTensorCoreOp(
   b.create<transform::ApplyPatternsOp>(funcH, [](OpBuilder &b, Location loc) {
     b.create<transform::ApplyFoldMemrefAliasOpsPatternsOp>(loc);
   });
-  b.create<IREE::transform_dialect::ApplyCommonSubexpressionEliminationOp>(
-      funcH);
+  b.create<mlir::transform::ApplyCommonSubexpressionEliminationOp>(funcH);
   // TODO: not a functional style transform and avoid returning funcH.
   funcH = b.create<transform::HoistRedundantVectorTransfersOp>(
       transform::AnyOpType::get(b.getContext()), funcH);
@@ -611,8 +610,8 @@ void mlir::iree_compiler::gpu::buildMultiBuffering(
       transform::OperationType::get(b.getContext(), "memref.alloc"), funcH,
       b.getStrArrayAttr({memref::AllocOp::getOperationName()}),
       /*matchInterfaceEnum=*/transform::MatchInterfaceEnumAttr(),
-      /*opAttrs=*/DictionaryAttr(),
-      /*filterResultType=*/TypeAttr());
+      /*opAttrs=*/DictionaryAttr(), /*filterResultType=*/TypeAttr(),
+      /*filterOperandTYpes=*/ArrayAttr());
   // TODO: Better builder instead of setting post-hoc.
   auto multiBufferOp = b.create<transform::MemRefMultiBufferOp>(
       transform::AnyOpType::get(b.getContext()), allocH);
@@ -685,8 +684,7 @@ Value mlir::iree_compiler::gpu::buildBufferize(ImplicitLocOpBuilder &b,
     b.create<transform::ApplyCanonicalizationPatternsOp>(loc);
   });
   b.create<IREE::transform_dialect::ApplyLoopIndependentCodeMotionOp>(funcH);
-  b.create<IREE::transform_dialect::ApplyCommonSubexpressionEliminationOp>(
-      funcH);
+  b.create<mlir::transform::ApplyCommonSubexpressionEliminationOp>(funcH);
   b.create<IREEEliminateEmptyTensorsOp>(variantH);
   auto bufferizeOp = b.create<IREEBufferizeOp>(variantH, /*targetGpu=*/true);
   bufferizeOp.setTargetGpu(true);

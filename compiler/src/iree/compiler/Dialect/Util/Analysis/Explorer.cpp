@@ -13,8 +13,7 @@
 
 #define DEBUG_TYPE "iree-util-explorer"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 static StringRef getOpName(Operation *op) {
   auto symbol = dyn_cast<mlir::SymbolOpInterface>(op);
@@ -54,9 +53,15 @@ Explorer::Explorer(Operation *rootOp, TraversalAction defaultAction)
 Explorer::~Explorer() = default;
 
 TraversalAction Explorer::getTraversalAction(Operation *op) {
-  auto opIt = opActions.find(op->getName());
+  auto name = op->getName();
+
+  // Explicit op actions override all behavior.
+  auto opIt = opActions.find(name);
   if (opIt != opActions.end())
     return opIt->second;
+
+  // Dialect actions let us carve out entire dialects and override interfaces
+  // that may otherwise pick up ops.
   auto *dialect = op->getDialect();
   if (!dialect) {
     // Unregistered dialect/op - ignore.
@@ -70,12 +75,25 @@ TraversalAction Explorer::getTraversalAction(Operation *op) {
   auto dialectIt = dialectActions.find(dialect->getNamespace());
   if (dialectIt != dialectActions.end())
     return dialectIt->second;
+
+  // Slow path for interfaces as there's no way to enumerate the interfaces an
+  // op has registered (AFAICT).
+  for (auto [interfaceId, action] : interfaceActions) {
+    if (name.hasInterface(interfaceId))
+      return action;
+  }
+
   return defaultAction;
 }
 
 void Explorer::setDialectAction(StringRef dialectNamespace,
                                 TraversalAction action) {
   dialectActions[dialectNamespace] = action;
+}
+
+void Explorer::setOpInterfaceAction(TypeID interfaceId,
+                                    TraversalAction action) {
+  interfaceActions[interfaceId] = action;
 }
 
 void Explorer::setOpAction(OperationName op, TraversalAction action) {
@@ -450,7 +468,7 @@ TraversalResult Explorer::walkReturnOps(Operation *parentOp,
         break;
     }
   } else if (auto parentFuncOp =
-                 llvm::dyn_cast<FunctionOpInterface>(parentOp)) {
+                 llvm::dyn_cast<mlir::FunctionOpInterface>(parentOp)) {
     if (parentFuncOp->getNumRegions() == 0 ||
         parentFuncOp->getRegion(0).empty()) {
       LLVM_DEBUG(
@@ -1101,5 +1119,4 @@ TraversalResult Explorer::walkTransitiveUsers(Value value, OperationWalkFn fn) {
   });
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

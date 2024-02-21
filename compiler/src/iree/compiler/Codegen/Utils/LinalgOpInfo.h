@@ -6,24 +6,17 @@
 
 #ifndef IREE_COMPILER_CODEGEN_COMMON_LINALGOPINFO_H_
 #define IREE_COMPILER_CODEGEN_COMMON_LINALGOPINFO_H_
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Types.h"
-#include "mlir/IR/Value.h"
 
-namespace mlir {
+#include "mlir/Dialect/Linalg/IR/LinalgInterfaces.h"
+#include "mlir/IR/AffineMap.h"
 
-namespace linalg {
-class LinalgOp;
-}
-
-namespace iree_compiler {
-
-/// Returns true if a map represents the appropriate transpose. Pass this into
-/// the LinalgOpInfo for additional transpose granularity.
-using TransposeMapFilter = std::function<bool(AffineMap map)>;
+namespace mlir::iree_compiler {
 
 class LinalgOpInfo {
 public:
+  /// Returns true if a map represents a chosen transpose granularity.
+  using TransposeMapFilter = std::function<bool(AffineMap map)>;
+
   LinalgOpInfo(linalg::LinalgOp linalgOp);
   LinalgOpInfo(linalg::LinalgOp linalgOp,
                TransposeMapFilter transposeMapFilter);
@@ -40,13 +33,15 @@ private:
   void computeInfo(linalg::LinalgOp);
 
   TransposeMapFilter transposeMapFilter;
-  bool transposeTrait;
   bool reductionTrait;
   bool dynamicTrait;
   SmallVector<OpOperand *> transposeOperands;
 };
 
-} // namespace iree_compiler
-} // namespace mlir
+// Returns true if the given |linalgOp| is a matmul or batch matmul.
+// This also looks into the shape to filter out cases like matvec.
+bool isMatmulOrBatchMatmul(linalg::LinalgOp linalgOp);
+
+} // namespace mlir::iree_compiler
 
 #endif // IREE_COMPILER_CODEGEN_COMMON_LINALGOPINFO_H_

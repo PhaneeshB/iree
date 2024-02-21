@@ -7,9 +7,10 @@
 #include "iree/compiler/Bindings/Native/Transforms/Passes.h"
 #include "iree/compiler/Dialect/HAL/IR/HALDialect.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
+#include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
+#include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "llvm/ADT/STLExtras.h"
 #include "mlir/Dialect/Affine/Utils.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/MLIRContext.h"
@@ -19,10 +20,7 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace ABI {
+namespace mlir::iree_compiler::IREE::ABI {
 
 // Returns the invocation model specified on |op| or the |defaultModel|.
 static IREE::ABI::InvocationModel
@@ -62,13 +60,14 @@ static void stripABIAttrs(SmallVectorImpl<DictionaryAttr> &allAttrs) {
 }
 
 // Creates the corresponding wrapper function for the given import function.
-static func::FuncOp
+static IREE::Util::FuncOp
 createImportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
-                        func::FuncOp importOp, FunctionType oldImportType,
-                        FunctionType newImportType, StringRef privateName) {
+                        FunctionOpInterface importOp,
+                        FunctionType oldImportType, FunctionType newImportType,
+                        StringRef privateName) {
   // Create the internal wrapper function with the original import signature.
   auto wrapperOp =
-      func::FuncOp::create(importOp.getLoc(), privateName, oldImportType);
+      IREE::Util::FuncOp::create(importOp.getLoc(), privateName, oldImportType);
   wrapperOp.setPrivate();
 
   // Copy arg/result attrs from the import op to the wrapper function.
@@ -133,8 +132,12 @@ createImportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
     // HACK: this is relying on the fact that there's only one HAL device.
     // We should instead have a way of creating fences on the device that
     // is used to produce the tensors we're wrapping.
-    auto device =
-        entryBuilder.create<IREE::HAL::ExSharedDeviceOp>(importOp.getLoc());
+    //
+    // TODO(multi-device): emit get with derived ordinal or lookup with attr. We
+    // could always say device 0 for now but could instead look for an
+    // iree.abi.affinity/iree.abi.device/etc.
+    Value device =
+        IREE::HAL::DeviceType::resolveAny(importOp.getLoc(), entryBuilder);
 
     // When exporting a fence we need to put a barrier between the rest of the
     // program and the tensors consumed by the import.
@@ -201,8 +204,8 @@ createImportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
     arguments.push_back(signalFence);
 
   // Make the call with the updated types.
-  auto callOp =
-      entryBuilder.create<func::CallOp>(importOp.getLoc(), importOp, arguments);
+  auto callOp = entryBuilder.create<IREE::Util::CallOp>(importOp.getLoc(),
+                                                        importOp, arguments);
 
   // If the call has side-effects then we need to wait on its signal fence on
   // the host. This is because they may have launched a thread of their own to
@@ -234,7 +237,7 @@ createImportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
     }
   }
 
-  entryBuilder.create<func::ReturnOp>(importOp.getLoc(), results);
+  entryBuilder.create<IREE::Util::ReturnOp>(importOp.getLoc(), results);
   return wrapperOp;
 }
 
@@ -243,7 +246,7 @@ createImportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
 // new wrapper function.
 static LogicalResult wrapImportFunc(IREE::ABI::InvocationModel invocationModel,
                                     mlir::ModuleOp moduleOp,
-                                    func::FuncOp importOp,
+                                    FunctionOpInterface importOp,
                                     SymbolTable &symbolTable) {
   // Replace all existing calls to the import to instead call the wrapper.
   auto publicName = importOp.getName().str();
@@ -257,9 +260,8 @@ static LogicalResult wrapImportFunc(IREE::ABI::InvocationModel invocationModel,
   }
 
   // Convert import signature types to those required by the binding ABI.
-  auto oldImportType = importOp.getFunctionType();
   SmallVector<Type> inputTypes;
-  for (auto oldType : oldImportType.getInputs()) {
+  for (auto oldType : importOp.getArgumentTypes()) {
     inputTypes.push_back(mapToABIType(oldType));
   }
   auto fenceType = IREE::HAL::FenceType::get(importOp.getContext());
@@ -273,7 +275,7 @@ static LogicalResult wrapImportFunc(IREE::ABI::InvocationModel invocationModel,
     break;
   }
   SmallVector<Type> resultTypes;
-  for (auto oldType : oldImportType.getResults()) {
+  for (auto oldType : importOp.getResultTypes()) {
     resultTypes.push_back(mapToABIType(oldType));
   }
   auto newImportType =
@@ -282,7 +284,8 @@ static LogicalResult wrapImportFunc(IREE::ABI::InvocationModel invocationModel,
   // Create the wrapper function that matches the original internal types but
   // calls out to the updated import using ABI types.
   auto wrapperOp = createImportWrapperFunc(
-      invocationModel, importOp, oldImportType, newImportType, privateName);
+      invocationModel, importOp, cast<FunctionType>(importOp.getFunctionType()),
+      newImportType, privateName);
   if (!wrapperOp)
     return failure();
   moduleOp.insert(++Block::iterator(importOp), wrapperOp);
@@ -294,14 +297,116 @@ static LogicalResult wrapImportFunc(IREE::ABI::InvocationModel invocationModel,
   return success();
 }
 
+static StringAttr getNameFromDictAttr(DictionaryAttr attr) {
+  return attr ? attr.getAs<StringAttr>("iree.abi.name") : nullptr;
+}
+
+static StringAttr inferArgumentName(MLIRContext *context, int index,
+                                    DictionaryAttr attrs) {
+  if (auto attrName = getNameFromDictAttr(attrs))
+    return attrName;
+  return StringAttr::get(context, "input" + std::to_string(index));
+}
+
+static StringAttr inferResultName(MLIRContext *context, int index,
+                                  DictionaryAttr attrs) {
+  if (auto attrName = getNameFromDictAttr(attrs))
+    return attrName;
+  return StringAttr::get(context, "output" + std::to_string(index));
+}
+
+static DictionaryAttr getIOAttr(ArrayAttr allAttrs, unsigned i) {
+  if (!allAttrs)
+    return nullptr;
+  return cast_or_null<DictionaryAttr>(allAttrs.getValue()[i]);
+}
+
+static void formatIOAttr(DictionaryAttr attrs, llvm::raw_ostream &os) {
+  if (!attrs || attrs.empty())
+    return;
+  auto shouldIncludeAttr = [](const NamedAttribute &attr) {
+    return attr.getName().getValue() != "iree.abi.name";
+  };
+  if (!llvm::any_of(attrs, shouldIncludeAttr))
+    return;
+  os << " {";
+  llvm::interleaveComma(llvm::make_filter_range(attrs, shouldIncludeAttr), os,
+                        [&](auto argAttr) {
+                          os << argAttr.getName().getValue();
+                          os << " = ";
+                          os << argAttr.getValue();
+                        });
+  os << "}";
+}
+
+// Returns a string representing the |exportOp| in a human-friendly way.
+// This doesn't have to match the exact MLIR (though could) as the intent is for
+// it to be helpful instead of something a user could compile. This means we
+// want to bake away argument/result attributes if we can do something
+// meaningful with them (like names).
+static StringAttr
+formatSourceDeclaration(IREE::ABI::InvocationModel invocationModel,
+                        FunctionOpInterface exportOp, StringRef publicName,
+                        ArrayAttr allArgAttrs, ArrayAttr allResultAttrs) {
+  std::string decl;
+  llvm::raw_string_ostream os(decl);
+  switch (invocationModel) {
+  default:
+    assert(false && "unhandled invocation model");
+    break;
+  case IREE::ABI::InvocationModel::Sync:
+    os << "sync ";
+    break;
+  case IREE::ABI::InvocationModel::CoarseFences:
+    os << "async ";
+    break;
+  }
+  os << "func @" << publicName;
+  os << "(";
+  for (auto arg : exportOp.getArguments()) {
+    if (arg.getArgNumber() > 0)
+      os << ", ";
+    os << "%";
+    os << inferArgumentName(exportOp.getContext(), arg.getArgNumber(),
+                            getIOAttr(allArgAttrs, arg.getArgNumber()))
+              .getValue();
+    os << ": " << arg.getType();
+    if (auto argAttrs = getIOAttr(allArgAttrs, arg.getArgNumber())) {
+      formatIOAttr(argAttrs, os);
+    }
+  }
+  os << ") -> (";
+  for (auto [resultNumber, resultType] :
+       llvm::enumerate(exportOp.getResultTypes())) {
+    if (resultNumber > 0)
+      os << ", ";
+    os << "%";
+    os << inferResultName(exportOp.getContext(), resultNumber,
+                          getIOAttr(allResultAttrs, resultNumber))
+              .getValue();
+    os << ": " << resultType;
+    if (auto resultAttrs = getIOAttr(allResultAttrs, resultNumber)) {
+      formatIOAttr(resultAttrs, os);
+    }
+  }
+  os << ")";
+  return StringAttr::get(exportOp.getContext(), decl);
+}
+
 // Populates attributes on |wrapperOp| to support runtime reflection.
 // These are attached to the exported function and can be queried at runtime
 // with iree_vm_function_lookup_attr_by_name.
 static void populateReflectionAttrs(IREE::ABI::InvocationModel invocationModel,
-                                    func::FuncOp exportOp,
-                                    func::FuncOp wrapperOp) {
+                                    FunctionOpInterface exportOp,
+                                    IREE::Util::FuncOp wrapperOp) {
   auto *context = exportOp.getContext();
   SmallVector<NamedAttribute> attrs;
+
+  if (auto reflectionAttr =
+          exportOp->getAttrOfType<DictionaryAttr>("iree.reflection")) {
+    attrs.append(reflectionAttr.getValue().begin(),
+                 reflectionAttr.getValue().end());
+  }
 
   if (auto abiAttr = exportOp->getAttr("iree.abi")) {
     attrs.emplace_back(StringAttr::get(context, "iree.abi"), abiAttr);
@@ -317,38 +422,30 @@ static void populateReflectionAttrs(IREE::ABI::InvocationModel invocationModel,
     break;
   }
 
+  // If not provided by the user add the source declaration as the MLIR type.
+  // Users in source frontends can override this with something more natural
+  // (python/whatever).
+  if (auto declAttr = exportOp->getAttr("iree.abi.declaration")) {
+    attrs.emplace_back(StringAttr::get(context, "iree.abi.declaration"),
+                       declAttr);
+  } else {
+    attrs.emplace_back(StringAttr::get(context, "iree.abi.declaration"),
+                       formatSourceDeclaration(invocationModel, exportOp,
+                                               wrapperOp.getName(),
+                                               exportOp.getAllArgAttrs(),
+                                               exportOp.getAllResultAttrs()));
+  }
+
   if (!attrs.empty()) {
     auto reflectionAttr = DictionaryAttr::get(context, attrs);
     wrapperOp->setAttr("iree.reflection", reflectionAttr);
   }
 }
 
-static StringAttr getNameFromDictAttr(DictionaryAttr attr, Builder &builder) {
-  // TODO(benvanik): support naming. We could look for iree.abi.name or some
-  // other attribute that gets populated by frontends.
-  return nullptr;
-}
-
-static StringAttr inferArgumentName(int index, ArrayRef<DictionaryAttr> attrs,
-                                    Builder &builder) {
-  if (auto attrName = getNameFromDictAttr(attrs[index], builder)) {
-    return attrName;
-  }
-  return builder.getStringAttr("input " + std::to_string(index));
-}
-
-static StringAttr inferResultName(int index, ArrayRef<DictionaryAttr> attrs,
-                                  Builder &builder) {
-  if (auto attrName = getNameFromDictAttr(attrs[index], builder)) {
-    return attrName;
-  }
-  return builder.getStringAttr("output " + std::to_string(index));
-}
-
 // Creates the corresponding wrapper function for the given export function.
-static func::FuncOp
+static IREE::Util::FuncOp
 createExportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
-                        func::FuncOp exportOp, StringRef publicName) {
+                        FunctionOpInterface exportOp, StringRef publicName) {
   // Copy arg/result attrs from the export op to the wrapper function.
   // We may want to remove them from the export but would need to filter.
   SmallVector<DictionaryAttr> argAttrDict;
@@ -363,9 +460,8 @@ createExportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
   // NOTE: this is where we could change our signature to provide additional
   // values from the runtime bindings as may be required - like semaphores for
   // async behavior or cancellation.
-  auto oldExportType = exportOp.getFunctionType();
   SmallVector<Type> inputTypes;
-  for (auto oldType : oldExportType.getInputs()) {
+  for (auto oldType : exportOp.getArgumentTypes()) {
     inputTypes.push_back(mapToABIType(oldType));
   }
   auto fenceType = IREE::HAL::FenceType::get(exportOp.getContext());
@@ -381,7 +477,7 @@ createExportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
     break;
   }
   SmallVector<Type> resultTypes;
-  for (auto oldType : oldExportType.getResults()) {
+  for (auto oldType : exportOp.getResultTypes()) {
     resultTypes.push_back(mapToABIType(oldType));
   }
   auto newExportType =
@@ -390,7 +486,7 @@ createExportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
   // Update the import to the new type and mark it as being converted so we
   // don't try to convert it again.
   auto wrapperOp =
-      func::FuncOp::create(exportOp.getLoc(), publicName, newExportType);
+      IREE::Util::FuncOp::create(exportOp.getLoc(), publicName, newExportType);
   wrapperOp.setPublic();
   wrapperOp->setAttr("iree.abi.stub", UnitAttr::get(exportOp.getContext()));
   wrapperOp.setAllArgAttrs(argAttrDict);
@@ -398,6 +494,7 @@ createExportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
 
   // Populate the reflection attrs based on the original types.
   populateReflectionAttrs(invocationModel, exportOp, wrapperOp);
+  exportOp->removeAttr("iree.reflection");
 
   auto *entryBlock = wrapperOp.addEntryBlock();
   auto entryBuilder = OpBuilder::atBlockBegin(entryBlock);
@@ -440,6 +537,7 @@ createExportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
   }
 
   // Marshal arguments.
+  auto oldExportType = cast<FunctionType>(exportOp.getFunctionType());
   SmallVector<Value> arguments;
   for (auto [argIndex, arg] : llvm::enumerate(
            entryBlock->getArguments().slice(0, oldExportType.getNumInputs()))) {
@@ -450,7 +548,8 @@ createExportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
       auto importOp = entryBuilder.create<IREE::HAL::TensorImportOp>(
           arg.getLoc(), oldType, arg,
           encoding ? encoding : TypeAttr::get(oldType), waitFence,
-          inferArgumentName(argIndex, argAttrDict, entryBuilder));
+          inferArgumentName(entryBuilder.getContext(), argIndex,
+                            exportOp.getArgAttrDict(argIndex)));
       arguments.push_back(importOp.getTarget());
     } else {
       arguments.push_back(arg);
@@ -458,8 +557,8 @@ createExportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
   }
 
   // Make the call with the original types.
-  auto callOp =
-      entryBuilder.create<func::CallOp>(exportOp.getLoc(), exportOp, arguments);
+  auto callOp = entryBuilder.create<IREE::Util::CallOp>(exportOp.getLoc(),
+                                                        exportOp, arguments);
   auto asyncResults = llvm::to_vector(callOp.getResults());
 
   // Insert a barrier if requested - all tensors will be calculated and the
@@ -498,13 +597,14 @@ createExportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
           result.getLoc(), newType, result,
           encoding ? encoding : TypeAttr::get(result.getType()), dynamicDims,
           resultStorage,
-          inferResultName(resultIndex, resultAttrDict, entryBuilder)));
+          inferResultName(entryBuilder.getContext(), resultIndex,
+                          exportOp.getResultAttrDict(resultIndex))));
     } else {
       results.push_back(result);
     }
   }
 
-  entryBuilder.create<func::ReturnOp>(exportOp.getLoc(), results);
+  entryBuilder.create<IREE::Util::ReturnOp>(exportOp.getLoc(), results);
   return wrapperOp;
 }
 
@@ -514,20 +614,16 @@ createExportWrapperFunc(IREE::ABI::InvocationModel invocationModel,
 // bindings can also perform their own equivalent wrapping.
 static LogicalResult wrapExportFunc(IREE::ABI::InvocationModel invocationModel,
                                     mlir::ModuleOp moduleOp,
-                                    func::FuncOp exportOp,
+                                    FunctionOpInterface exportOp,
                                     SymbolTable &symbolTable) {
   // Rename the original function so that our wrapper can use the original
   // name in its public definition.
   auto publicName = exportOp.getName().str();
   auto privateName = "_" + publicName;
-  auto privateNameAttr =
-      mlir::StringAttr::get(exportOp.getContext(), privateName);
-  if (failed(symbolTable.replaceAllSymbolUses(exportOp, privateNameAttr,
-                                              moduleOp))) {
+  if (failed(symbolTable.rename(exportOp, privateName))) {
     return exportOp.emitError() << "unknown symbol table op encountered; "
                                    "cannot fix up symbol names";
   }
-  exportOp.setName(privateNameAttr);
   exportOp.setPrivate();
 
   // Create the wrapper function that conforms to the IREE native ABI and
@@ -536,7 +632,7 @@ static LogicalResult wrapExportFunc(IREE::ABI::InvocationModel invocationModel,
       createExportWrapperFunc(invocationModel, exportOp, publicName);
   if (!wrapperOp)
     return failure();
-  moduleOp.insert(Block::iterator(exportOp), wrapperOp);
+  symbolTable.insert(wrapperOp, Block::iterator(exportOp));
 
   return success();
 }
@@ -554,8 +650,8 @@ public:
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<func::FuncDialect, mlir::arith::ArithDialect,
-                    mlir::tensor::TensorDialect, IREE::HAL::HALDialect>();
+    registry.insert<mlir::arith::ArithDialect, mlir::tensor::TensorDialect,
+                    IREE::HAL::HALDialect, IREE::Util::UtilDialect>();
   }
 
   StringRef getArgument() const override {
@@ -572,13 +668,13 @@ public:
     auto moduleOp = getOperation();
 
     // Gather functions that need wrapping.
-    SmallVector<func::FuncOp> importOps;
-    SmallVector<func::FuncOp> exportOps;
-    for (auto funcOp : moduleOp.getOps<func::FuncOp>()) {
+    SmallVector<FunctionOpInterface> importOps;
+    SmallVector<FunctionOpInterface> exportOps;
+    for (auto funcOp : moduleOp.getOps<IREE::Util::FuncOp>()) {
       // Ignore functions already marked as having their ABI goo handled.
-      if (funcOp->hasAttr("iree.abi.stub"))
+      if (funcOp->hasAttr("iree.abi.stub")) {
         continue;
-      if (funcOp.isExternal()) {
+      } else if (funcOp.isExternal()) {
         // Imported function.
         importOps.push_back(funcOp);
       } else if (funcOp.isPublic()) {
@@ -632,7 +728,4 @@ createWrapEntryPointsPass(IREE::ABI::InvocationModel invocationModel) {
 
 static PassRegistration<WrapEntryPointsPass> pass;
 
-} // namespace ABI
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::ABI

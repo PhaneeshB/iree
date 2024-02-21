@@ -68,6 +68,8 @@ nanobind_add_module(iree_runtime_bindings_python_PyExtRt
   "io.cc"
   "hal.h"
   "hal.cc"
+  "loop.h"
+  "loop.cc"
   "numpy_interop.h"
   "numpy_interop.cc"
   "py_module.h"
@@ -89,6 +91,7 @@ target_link_libraries(iree_runtime_bindings_python_PyExtRt
   iree::base::internal::path
   iree::io::file_handle
   iree::io::formats::gguf
+  iree::io::formats::irpa
   iree::io::formats::safetensors
   iree::io::parameter_index
   iree::io::parameter_index_provider
@@ -96,6 +99,7 @@ target_link_libraries(iree_runtime_bindings_python_PyExtRt
   iree::io::scope_map
   iree::modules::io::parameters
   iree::modules::hal
+  iree::schemas::parameter_archive
   iree::tooling::device_util
   iree::tooling::modules
   iree::vm
@@ -131,20 +135,25 @@ iree_py_library(
     "iree/runtime/benchmark.py"
     "iree/runtime/flags.py"
     "iree/runtime/function.py"
+    "iree/runtime/io.py"
     "iree/runtime/system_api.py"
     "iree/runtime/system_setup.py"
-    "iree/runtime/tracing.py"
     "iree/runtime/version.py"
     "iree/_runtime/__init__.py"
     "iree/_runtime/libs.py"
-    "iree/_runtime/scripts/iree_benchmark_trace/__main__.py"
     "iree/_runtime/scripts/iree_benchmark_module/__main__.py"
     "iree/_runtime/scripts/iree_cpuinfo/__main__.py"
+    "iree/_runtime/scripts/iree_convert_parameters/__main__.py"
+    "iree/_runtime/scripts/iree_create_parameters/__main__.py"
     "iree/_runtime/scripts/iree_dump_module/__main__.py"
     "iree/_runtime/scripts/iree_dump_parameters/__main__.py"
-    "iree/_runtime/scripts/iree_run_trace/__main__.py"
     "iree/_runtime/scripts/iree_run_module/__main__.py"
     "iree/_runtime/scripts/iree_tracy_capture/__main__.py"
+    "iree/runtime/distributed/__init__.py"
+    "iree/runtime/distributed/distributed.py"
+    "iree/runtime/distributed/run_rank.py"
+    "iree/runtime/distributed/sharding_pass_validation.py"
+    "iree/runtime/distributed/utils.py"
   PYEXT_DEPS
     iree_runtime_bindings_python_PyExtRt
 )
@@ -157,14 +166,20 @@ iree_symlink_tool(
 
 iree_symlink_tool(
   TARGET runtime
-  FROM_TOOL_TARGET iree-benchmark-trace
-  TO_EXE_NAME iree/_runtime_libs/iree-benchmark-trace
+  FROM_TOOL_TARGET iree-convert-parameters
+  TO_EXE_NAME iree/_runtime_libs/iree-convert-parameters
 )
 
 iree_symlink_tool(
   TARGET runtime
   FROM_TOOL_TARGET iree-cpuinfo
   TO_EXE_NAME iree/_runtime_libs/iree-cpuinfo
+)
+
+iree_symlink_tool(
+  TARGET runtime
+  FROM_TOOL_TARGET iree-create-parameters
+  TO_EXE_NAME iree/_runtime_libs/iree-create-parameters
 )
 
 iree_symlink_tool(
@@ -177,12 +192,6 @@ iree_symlink_tool(
   TARGET runtime
   FROM_TOOL_TARGET iree-dump-parameters
   TO_EXE_NAME iree/_runtime_libs/iree-dump-parameters
-)
-
-iree_symlink_tool(
-  TARGET runtime
-  FROM_TOOL_TARGET iree-run-trace
-  TO_EXE_NAME iree/_runtime_libs/iree-run-trace
 )
 
 iree_symlink_tool(
@@ -314,11 +323,11 @@ cmake_language(DEFER DIRECTORY \"${IREE_SOURCE_DIR}\"
   TARGETS
     iree-cpuinfo
     iree-benchmark-module
-    iree-benchmark-trace
+    iree-convert-parameters
+    iree-create-parameters
     iree-dump-module
     iree-dump-parameters
     iree-run-module
-    iree-run-trace
     ${_EXTRA_INSTALL_TOOL_TARGETS}
   DESTINATION \"${_INSTALL_DIR}/iree/_runtime_libs\"
   COMPONENT \"${_INSTALL_COMPONENT}\"

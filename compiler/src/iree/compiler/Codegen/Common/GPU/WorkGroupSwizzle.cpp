@@ -9,8 +9,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 /// This function implements the following swizzling logic
 /// void getTiledId2(unsigned x, unsigned y, unsigned* tiledx,
@@ -55,7 +54,7 @@ static void makeSwizzledId(Location loc, OpBuilder b, Value workgroupIdX,
                                           unboundedSwizzledIdY);
 }
 
-LogicalResult swizzleWorkgroupsInFunc(func::FuncOp funcOp,
+LogicalResult swizzleWorkgroupsInFunc(mlir::FunctionOpInterface funcOp,
                                       unsigned swizzleLogTile) {
   if (swizzleLogTile == 0)
     return success();
@@ -109,7 +108,7 @@ struct WorkGroupSwizzlePass
     return success();
   }
   void runOnOperation() override {
-    func::FuncOp funcOp = getOperation();
+    auto funcOp = getOperation();
     (void)swizzleWorkgroupsInFunc(funcOp, swizzleLogTile);
   }
 
@@ -118,10 +117,9 @@ private:
 };
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createWorkGroupSwizzle(unsigned swizzleLogTile) {
   return std::make_unique<WorkGroupSwizzlePass>(swizzleLogTile);
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

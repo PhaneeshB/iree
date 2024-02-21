@@ -20,8 +20,7 @@
 #define DEBUG_TYPE "iree-codegen-hoist-unrolled-vector"
 #define DBGS() (llvm::dbgs() << '[' << DEBUG_TYPE << "] ")
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 /// Returns all the users of `srcTensor` if they are artifacts from vector
 /// unrolling. It is true only if
@@ -127,10 +126,10 @@ static scf::ForOp hoistVectorExtractInsertSlice(
     if (!forOp.isDefinedOutsideOfLoop(extractStridedSliceOp.getVector())) {
       assert(extractStridedSliceOp.getVector() == tensorBBArg &&
              "extractSlice source not defined above must be the tracked bbArg");
-      rewriter.startRootUpdate(extractStridedSliceOp);
+      rewriter.startOpModification(extractStridedSliceOp);
       extractStridedSliceOp.getVectorMutable().assign(
           forOp.getInitArgs()[initArgNumber]);
-      rewriter.finalizeRootUpdate(extractStridedSliceOp);
+      rewriter.finalizeOpModification(extractStridedSliceOp);
     }
   }
 
@@ -150,20 +149,20 @@ static scf::ForOp hoistVectorExtractInsertSlice(
   // 3. Update the yield. Invariant: initArgNumber is the destination tensor.
   auto yieldOp =
       cast<scf::YieldOp>(newForOp.getRegion().front().getTerminator());
-  rewriter.startRootUpdate(yieldOp);
+  rewriter.startOpModification(yieldOp);
   yieldOp->setOperand(initArgNumber, insertOps[0].getDest());
-  rewriter.finalizeRootUpdate(yieldOp);
+  rewriter.finalizeOpModification(yieldOp);
 
   // 4. Hoist all the write ops after and make uses of
   // newForOp.getResult(initArgNumber) flow through it.
   for (auto [idx, insertStridedSliceOp] : llvm::enumerate(insertOps)) {
     insertStridedSliceOp->moveAfter(newForOp);
-    rewriter.startRootUpdate(insertStridedSliceOp);
+    rewriter.startOpModification(insertStridedSliceOp);
     insertStridedSliceOp.getSourceMutable().assign(
         newForOp.getResults()[initArgNumber + idx + 1]);
     insertStridedSliceOp.getDestMutable().assign(
         newForOp.getResults()[initArgNumber]);
-    rewriter.finalizeRootUpdate(insertStridedSliceOp);
+    rewriter.finalizeOpModification(insertStridedSliceOp);
     rewriter.replaceAllUsesExcept(newForOp.getResult(initArgNumber),
                                   insertStridedSliceOp.getResult(),
                                   insertStridedSliceOp);
@@ -233,10 +232,9 @@ void HoistUnrolledVectorExtractInsertSlicePass::runOnOperation() {
 }
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createHoistUnrolledVectorExtractInsertSlicePass() {
   return std::make_unique<HoistUnrolledVectorExtractInsertSlicePass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

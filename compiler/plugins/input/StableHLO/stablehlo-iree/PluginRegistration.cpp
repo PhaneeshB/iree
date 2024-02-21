@@ -13,9 +13,7 @@
 
 #include "stablehlo-iree/Conversion/Passes.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace stablehlo {
+namespace mlir::iree_compiler::stablehlo {
 
 namespace {
 
@@ -51,14 +49,13 @@ struct StableHLOOptions {
 };
 
 static bool checkOpForTuples(Operation *op) {
-  if (auto funcOp = dyn_cast<func::FuncOp>(op)) {
-    FunctionType type = dyn_cast<FunctionType>(funcOp.getFunctionType());
-    for (auto t : type.getResults()) {
+  if (auto funcOp = dyn_cast<mlir::FunctionOpInterface>(op)) {
+    for (auto t : funcOp.getArgumentTypes()) {
       if (isa<TupleType>(t)) {
         return true;
       }
     }
-    for (auto t : type.getInputs()) {
+    for (auto t : funcOp.getResultTypes()) {
       if (isa<TupleType>(t)) {
         return true;
       }
@@ -158,9 +155,7 @@ struct StableHLOSession
 
 } // namespace
 
-} // namespace stablehlo
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::stablehlo
 
 IREE_DEFINE_COMPILER_OPTION_FLAGS(
     ::mlir::iree_compiler::stablehlo::StableHLOOptions);

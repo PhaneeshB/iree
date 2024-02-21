@@ -6,7 +6,7 @@
 
 #include "iree/compiler/Codegen/Common/PassDetail.h"
 #include "iree/compiler/Codegen/Common/Passes.h"
-#include "iree/compiler/Codegen/Dialect/IREECodegenAttrs.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenAttrs.h"
 #include "iree/compiler/Codegen/Transforms/Transforms.h"
 #include "iree/compiler/Codegen/Utils/Utils.h"
 #include "llvm/Support/Debug.h"
@@ -20,8 +20,7 @@
 
 #define DEBUG_TYPE "iree-codegen-remove-trivial-loops"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 /// Converts a symbolic GPU processor dimension to its numeric one.
 static unsigned dimToIndex(gpu::Dimension dim) {
@@ -91,7 +90,7 @@ getWorkgroupRange(Value processorValue, SmallVectorImpl<Value> & /*dims*/,
   return std::nullopt;
 }
 
-static LogicalResult removeOneTripTiledLoops(func::FuncOp funcOp,
+static LogicalResult removeOneTripTiledLoops(mlir::FunctionOpInterface funcOp,
                                              ArrayRef<int64_t> workgroupSize,
                                              ArrayRef<int64_t> numWorkgroups) {
   auto getWorkgroupRangeFn = [numWorkgroups,
@@ -111,7 +110,7 @@ namespace {
 class RemoveSingleIterationLoopPass final
     : public RemoveSingleIterationLoopBase<RemoveSingleIterationLoopPass> {
   void runOnOperation() override {
-    func::FuncOp funcOp = getOperation();
+    auto funcOp = getOperation();
     FailureOr<IREE::HAL::ExecutableExportOp> exportOp = getEntryPoint(funcOp);
     if (failed(exportOp))
       return;
@@ -126,10 +125,9 @@ class RemoveSingleIterationLoopPass final
 };
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>>
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createRemoveSingleIterationLoopPass() {
   return std::make_unique<RemoveSingleIterationLoopPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

@@ -9,7 +9,6 @@
 #include "iree/compiler/Dialect/Stream/IR/StreamDialect.h"
 #include "iree/compiler/Dialect/Stream/IR/StreamOps.h"
 #include "iree/compiler/Dialect/Stream/IR/StreamTraits.h"
-#include "iree/compiler/Dialect/Stream/Transforms/PassDetail.h"
 #include "iree/compiler/Dialect/Stream/Transforms/Passes.h"
 #include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
@@ -25,10 +24,10 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace Stream {
+namespace mlir::iree_compiler::IREE::Stream {
+
+#define GEN_PASS_DEF_DUMPSTATISTICSPASS
+#include "iree/compiler/Dialect/Stream/Transforms/Passes.h.inc"
 
 namespace {
 
@@ -46,7 +45,7 @@ struct UsageInfo {
   // stream.executable ops mapped by name.
   llvm::MapVector<StringRef, IREE::Stream::ExecutableOp> executableOps;
   // stream.executable exported function -> dispatches to it.
-  llvm::MapVector<mlir::func::FuncOp, SmallVector<IREE::Stream::CmdDispatchOp>>
+  llvm::MapVector<Operation *, SmallVector<IREE::Stream::CmdDispatchOp>>
       exportDispatchOps;
 
   // TODO(benvanik): resource allocations.
@@ -68,8 +67,8 @@ struct UsageInfo {
     for (auto executableOp : moduleOp.getOps<IREE::Stream::ExecutableOp>()) {
       executableOps[executableOp.getName()] = executableOp;
     }
-    for (auto funcLikeOp : moduleOp.getOps<FunctionOpInterface>()) {
-      funcLikeOp.walk([&](Operation *op) {
+    for (auto funcOp : moduleOp.getOps<mlir::FunctionOpInterface>()) {
+      funcOp.walk([&](Operation *op) {
         TypeSwitch<Operation *>(op)
             .Case<IREE::Util::BufferConstantOp>(
                 [&](auto op) { bufferConstantOps.push_back(op); })
@@ -292,7 +291,7 @@ static void prettyPrintSyncInfo(const UsageInfo &usageInfo, bool verbose,
 static void prettyPrintStreamInfo(const UsageInfo &usageInfo,
                                   IREE::Stream::CmdExecuteOp executeOp,
                                   llvm::raw_fd_ostream &os) {
-  auto parentOp = executeOp->getParentOfType<FunctionOpInterface>();
+  auto parentOp = executeOp->getParentOfType<mlir::FunctionOpInterface>();
 
   prettyPrintItemHeader(
       llvm::formatv("stream.cmd.execute", parentOp->getName().getStringRef()),
@@ -563,7 +562,7 @@ static void dumpJSONStructures(const UsageInfo &usageInfo,
 }
 
 //===----------------------------------------------------------------------===//
-// -iree-stream-dump-statistics
+// --iree-stream-dump-statistics
 //===----------------------------------------------------------------------===//
 
 // Opens a canonical |filePath| for text output.
@@ -587,19 +586,10 @@ openOutputFile(StringRef filePath) {
   }
 }
 
-class DumpStatisticsPass : public DumpStatisticsBase<DumpStatisticsPass> {
-public:
-  DumpStatisticsPass() = default;
-  DumpStatisticsPass(DumpOutputFormat outputFormat, std::string outputFile) {
-    this->outputFormat = outputFormat;
-    this->outputFile = outputFile;
-  }
-
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<IREE::Stream::StreamDialect>();
-    registry.insert<IREE::Util::UtilDialect>();
-  }
-
+struct DumpStatisticsPass
+    : public IREE::Stream::impl::DumpStatisticsPassBase<DumpStatisticsPass> {
+  using IREE::Stream::impl::DumpStatisticsPassBase<
+      DumpStatisticsPass>::DumpStatisticsPassBase;
   void runOnOperation() override {
     if (outputFormat == DumpOutputFormat::None)
       return;
@@ -635,13 +625,4 @@ public:
 
 } // namespace
 
-std::unique_ptr<OperationPass<mlir::ModuleOp>>
-createDumpStatisticsPass(DumpOutputFormat outputFormat,
-                         std::string outputFile) {
-  return std::make_unique<DumpStatisticsPass>(outputFormat, outputFile);
-}
-
-} // namespace Stream
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::Stream

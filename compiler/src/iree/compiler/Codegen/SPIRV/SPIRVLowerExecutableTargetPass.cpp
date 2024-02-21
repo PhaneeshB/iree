@@ -5,8 +5,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtDialect.h"
-#include "iree/compiler/Codegen/Dialect/IREECodegenAttrs.h"
-#include "iree/compiler/Codegen/Dialect/IREECodegenDialect.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenAttrs.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenDialect.h"
 #include "iree/compiler/Codegen/SPIRV/KernelConfig.h"
 #include "iree/compiler/Codegen/SPIRV/PassDetail.h"
 #include "iree/compiler/Codegen/SPIRV/Passes.h"
@@ -27,8 +27,7 @@
 
 #define DEBUG_TYPE "iree-spirv-lower-executable-target-pass"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 using CodeGenPipeline = IREE::Codegen::DispatchLoweringPassPipeline;
 
@@ -83,27 +82,48 @@ void SPIRVLowerExecutableTargetPass::runOnOperation() {
   case CodeGenPipeline::SPIRVSubgroupReduce:
     addSPIRVSubgroupReducePassPipeline(pipeline);
     break;
-  case CodeGenPipeline::SPIRVCooperativeMatrixVectorize:
-    addSPIRVCooperativeMatrixVectorizePassPipeline(
-        pipeline, translationInfo.value().getSoftwarePipelineDepth(),
-        translationInfo.value().getSoftwarePipelineStoreStage());
+  case CodeGenPipeline::SPIRVCooperativeMatrixVectorize: {
+    FailureOr<int64_t> maybeDepth =
+        getSoftwarePipelineDepth(translationInfo.value().getConfiguration());
+    FailureOr<int64_t> maybeStage = getSoftwarePipelineStoreStage(
+        translationInfo.value().getConfiguration());
+    if (failed(maybeDepth) || failed(maybeStage)) {
+      variantOp.emitOpError("invalid cooperative matrix pipeline without "
+                            "software pipelining configuration.");
+      return signalPassFailure();
+    }
+    addSPIRVCooperativeMatrixVectorizePassPipeline(pipeline, *maybeDepth,
+                                                   *maybeStage);
     break;
-  case CodeGenPipeline::SPIRVMatmulPromoteVectorize:
-    addSPIRVMatmulPromoteVectorizePassPipeline(
-        pipeline, translationInfo.value().getSoftwarePipelineDepth(),
-        translationInfo.value().getSoftwarePipelineStoreStage());
+  }
+  case CodeGenPipeline::SPIRVMatmulPromoteVectorize: {
+    FailureOr<int64_t> maybeDepth =
+        getSoftwarePipelineDepth(translationInfo.value().getConfiguration());
+    FailureOr<int64_t> maybeStage = getSoftwarePipelineStoreStage(
+        translationInfo.value().getConfiguration());
+    if (failed(maybeDepth) || failed(maybeStage)) {
+      variantOp.emitOpError(
+          "invalid matmul pipeline without software pipelining configuration.");
+      return signalPassFailure();
+    }
+    addSPIRVMatmulPromoteVectorizePassPipeline(pipeline, *maybeDepth,
+                                               *maybeStage);
     break;
+  }
   case CodeGenPipeline::SPIRVWinogradVectorize:
     addSPIRVWinogradVectorizePassPipeline(pipeline);
     break;
-  case CodeGenPipeline::TransformDialectCodegen:
-    addSPIRVTransformDialectPassPipeline(pipeline);
+  case CodeGenPipeline::TransformDialectCodegen: {
+    SymbolRefAttr codegenSpec = translationInfo.value().getCodegenSpec();
+    addSPIRVTransformDialectPassPipeline(
+        pipeline, codegenSpec ? codegenSpec.getLeafReference() : StringRef(""));
     break;
+  }
   // No pipeline specified, nothing to do.
   case CodeGenPipeline::None:
     return;
   default:
-    variantOp.emitOpError("Unsupported pipeline on GPU target.");
+    variantOp.emitOpError("unsupported pipeline on GPU target.");
     return signalPassFailure();
   }
 
@@ -123,5 +143,4 @@ createSPIRVLowerExecutableTargetPass() {
   return std::make_unique<SPIRVLowerExecutableTargetPass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler

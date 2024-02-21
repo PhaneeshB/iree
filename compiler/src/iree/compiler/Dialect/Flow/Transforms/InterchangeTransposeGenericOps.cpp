@@ -17,10 +17,7 @@
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-namespace mlir {
-namespace iree_compiler {
-namespace IREE {
-namespace Flow {
+namespace mlir::iree_compiler::IREE::Flow {
 
 namespace {
 
@@ -28,7 +25,7 @@ struct TransposeGenericOpPattern : public OpRewritePattern<linalg::GenericOp> {
   using OpRewritePattern<linalg::GenericOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(linalg::GenericOp genericOp,
                                 PatternRewriter &rewriter) const override {
-    if (!genericOp.hasTensorSemantics()) {
+    if (!genericOp.hasPureTensorSemantics()) {
       return rewriter.notifyMatchFailure(genericOp, "no tensor semantics");
     }
 
@@ -94,7 +91,4 @@ std::unique_ptr<Pass> createInterchangeTransposeGenericOpsPass() {
   return std::make_unique<InterchangeTransposeGenericOpsPass>();
 }
 
-} // namespace Flow
-} // namespace IREE
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler::IREE::Flow

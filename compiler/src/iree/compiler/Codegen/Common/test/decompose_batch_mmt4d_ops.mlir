@@ -1,4 +1,4 @@
-// RUN: iree-opt --iree-codegen-decompose-batch-mmt4d-ops --split-input-file %s | FileCheck %s
+// RUN: iree-opt --pass-pipeline="builtin.module(func.func(iree-codegen-decompose-batch-mmt4d-ops))" --split-input-file %s | FileCheck %s
 
 func.func @batch_mmt4d_with_fill(%arg0: tensor<1x10x32x8x1xf32>, %arg1: tensor<1x80x32x4x1xf32>, %arg2: tensor<1x10x80x8x4xf32>) -> tensor<1x10x80x8x4xf32> {
   %cst = arith.constant 0.000000e+00 : f32
@@ -43,9 +43,9 @@ func.func @batch_mmt4d_with_no_fill(%arg0: tensor<1x10x32x8x1xf32>, %arg1: tenso
 func.func @batch_mmt4d_with_extened_inputs(%arg0: tensor<1x10x32x8x1xi8>, %arg1: tensor<1x80x32x4x1xi8>, %arg2: tensor<1x10x80x8x4xi32>) -> tensor<1x10x80x8x4xi32> {
   %c0_i32 = arith.constant 0 : i32
   %0 = tensor.empty() : tensor<1x10x32x8x1xi32>
-  %1 = linalg.generic {indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2, d3, d4)>, 
-                                        affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2, d3, d4)>], 
-                       iterator_types = ["parallel", "parallel", "parallel", "parallel", "parallel"]} 
+  %1 = linalg.generic {indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2, d3, d4)>,
+                                        affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2, d3, d4)>],
+                       iterator_types = ["parallel", "parallel", "parallel", "parallel", "parallel"]}
                        ins(%arg0 : tensor<1x10x32x8x1xi8>) outs(%0 : tensor<1x10x32x8x1xi32>) {
   ^bb0(%in: i8, %out: i32):
     %6 = arith.extsi %in : i8 to i32
@@ -53,7 +53,7 @@ func.func @batch_mmt4d_with_extened_inputs(%arg0: tensor<1x10x32x8x1xi8>, %arg1:
   } -> tensor<1x10x32x8x1xi32>
   %2 = tensor.empty() : tensor<1x80x32x4x1xi32>
   %3 = linalg.generic {indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2, d3, d4)>,
-                                        affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2, d3, d4)>], 
+                                        affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2, d3, d4)>],
                        iterator_types = ["parallel", "parallel", "parallel", "parallel", "parallel"]}
                        ins(%arg1 : tensor<1x80x32x4x1xi8>) outs(%2 : tensor<1x80x32x4x1xi32>) {
   ^bb0(%in: i8, %out: i32):
@@ -117,3 +117,17 @@ func.func @batch_mmt4d_with_fill_batch_dim(%arg0: tensor<12x10x32x8x1xf32>, %arg
 // CHECK:        }
 // CHECK:        return %[[TILED_RES]] : tensor<12x10x80x8x4xf32>
 
+
+// -----
+
+func.func @batch_mmt4d_with_lowering_config(%arg0: tensor<12x4x64x8x1xf16>, %arg1: tensor<12x4x64x8x1xf16>, %arg2: tensor<12x4x4x8x8xf16>) -> tensor<12x4x4x8x8xf16> {
+  %cst = arith.constant 0.000000e+00 : f16
+  %0 = linalg.fill {lowering_config = #iree_codegen.lowering_config<tile_sizes = [[1, 4, 4, 0, 0], [1, 1, 1, 0, 8], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]>} ins(%cst : f16) outs(%arg2 : tensor<12x4x4x8x8xf16>) -> tensor<12x4x4x8x8xf16>
+  %1 = linalg.batch_mmt4d {lowering_config = #iree_codegen.lowering_config<tile_sizes = [[1, 4, 4, 0, 0, 0, 0], [1, 1, 1, 0, 8, 8, 0], [0, 0, 0, 1, 0, 0, 1]]>} ins(%arg0, %arg1 : tensor<12x4x64x8x1xf16>, tensor<12x4x64x8x1xf16>) outs(%0 : tensor<12x4x4x8x8xf16>) -> tensor<12x4x4x8x8xf16>
+  return %1 : tensor<12x4x4x8x8xf16>
+}
+// CHECK:      #[[CONFIG1:.+]] = #iree_codegen.lowering_config<tile_sizes = {{\[}}[4, 4, 0, 0], [1, 1, 0, 8], [0, 0, 0, 0], [0, 0, 0, 0]]>
+// CHECK:      #[[CONFIG2:.+]] = #iree_codegen.lowering_config<tile_sizes = {{\[}}[4, 4, 0, 0, 0, 0], [1, 1, 0, 8, 8, 0], [0, 0, 1, 0, 0, 1]]>
+// CHECK:      func.func @batch_mmt4d_with_lowering_config
+// CHECK:        linalg.fill {lowering_config = #[[CONFIG1]]}
+// CHECK:        linalg.mmt4d {lowering_config = #[[CONFIG2]]}

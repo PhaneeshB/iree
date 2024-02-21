@@ -10,22 +10,17 @@
 
 iree_add_all_subdirs()
 
-if(NOT IREE_HAL_DRIVER_CUDA OR NOT IREE_TARGET_BACKEND_CUDA)
+if(NOT IREE_HAL_DRIVER_CUDA)
+  return()
+endif()
+
+if(NOT IREE_HOST_BIN_DIR AND NOT IREE_TARGET_BACKEND_CUDA)
   return()
 endif()
 
 iree_lit_test_suite(
   NAME
     lit
-  SRCS
-    "mma.mlir"
-    "reduction.mlir"
-    "reduction_eltwise.mlir"
-    "reduction_v2.mlir"
-    "reduction_v2_uneven.mlir"
-    "softmax.mlir"
-    "softmax_partial.mlir"
-    "softmax_v2.mlir"
   TOOLS
     FileCheck
     iree-compile

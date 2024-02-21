@@ -10,16 +10,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtOps.h"
 #include "iree-dialects/Dialect/LinalgExt/Transforms/Transforms.h"
 #include "iree/compiler/Codegen/Common/Passes.h"
-#include "iree/compiler/Codegen/Dialect/IREECodegenAttrs.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenAttrs.h"
 #include "iree/compiler/Codegen/SPIRV/PassDetail.h"
 #include "iree/compiler/Codegen/SPIRV/Passes.h"
 #include "iree/compiler/Codegen/SPIRV/Utils.h"
+#include "iree/compiler/Codegen/Transforms/Transforms.h"
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
-#include "iree/compiler/Codegen/Utils/MarkerUtils.h"
-#include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
+#include "iree/compiler/Codegen/Utils/Utils.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -34,12 +33,9 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
-using mlir::iree_compiler::IREE::LinalgExt::TilingPatterns;
-
 #define DEBUG_TYPE "iree-spirv-tile"
 
-namespace mlir {
-namespace iree_compiler {
+namespace mlir::iree_compiler {
 
 //===----------------------------------------------------------------------===//
 // Tiling and fusion utilities
@@ -47,7 +43,7 @@ namespace iree_compiler {
 
 /// Collects computation ops which we will use as anchor to tile and fuse.
 static FailureOr<IREE::Codegen::LoweringConfigAttr>
-collectComputeOps(func::FuncOp funcOp,
+collectComputeOps(mlir::FunctionOpInterface funcOp,
                   SmallVectorImpl<Operation *> &computeOps) {
   // If there are `scf.if` ops which have linalg ops, we have both a fast and
   // slow paths for padding handling. Then we need to scan both regions to
@@ -118,7 +114,7 @@ static LogicalResult tileAndDistributeToThreads(linalg::LinalgOp consumerOp,
   SmallVector<OpFoldResult> tileSizesOfr =
       getAsIndexOpFoldResult(context, tileSizes);
   FailureOr<scf::SCFTileAndFuseResult> tileAndFuseResult =
-      scf::tileConsumerAndFuseProducerGreedilyUsingSCFForOp(
+      scf::tileConsumerAndFuseProducersUsingSCF(
           rewriter, cast<TilingInterface>(consumerOp.getOperation()),
           scf::SCFTileAndFuseOptions().setTilingOptions(
               scf::SCFTilingOptions().setTileSizes(tileSizesOfr)));
@@ -138,7 +134,7 @@ static LogicalResult tileAndDistributeToThreads(linalg::LinalgOp consumerOp,
   // We don't distribute here; instead, it will be done in a later step
   // after bufferization. So add attributes to the tiled loop nest to
   // indicate that they should be distributed to invocations.
-  ArrayRef<Operation *> loops = tileAndFuseResult.value().loops;
+  ArrayRef<LoopLikeOpInterface> loops = tileAndFuseResult.value().loops;
   const char *attrName = getSPIRVDistributeAttrName();
   // We can have more than 3 dimensions being tiled (e.g., for convolutions with
   // non-1 batch). But only the innermost 3 dimensions are distributed.
@@ -148,68 +144,27 @@ static LogicalResult tileAndDistributeToThreads(linalg::LinalgOp consumerOp,
   return success();
 }
 
-/// Populates `patterns` with patterns that tiles convolution/matmul ops with
-/// markers.
-static void populateTilingReductionPatterns(RewritePatternSet &patterns,
-                                            ArrayRef<int64_t> tileSizes) {
-  MLIRContext *context = patterns.getContext();
-  auto getTileSizeFn = [tileSizes](OpBuilder &builder, Operation *op) {
-    auto range = llvm::map_range(tileSizes, [&](int64_t size) -> Value {
-      return builder.create<arith::ConstantIndexOp>(op->getLoc(), size);
-    });
-    return llvm::to_vector(range);
-  };
-
-  auto tilingOptions = linalg::LinalgTilingOptions()
-                           .setLoopType(linalg::LinalgTilingLoopType::Loops)
-                           .setTileSizeComputationFunction(getTileSizeFn);
-  auto marker = StringAttr::get(context, getTileReductionMarker());
-  auto filter =
-      IREE::LinalgExt::LinalgTransformationFilter({marker}, std::nullopt);
-
-  TilingPatterns<linalg::BatchMatmulOp, linalg::GenericOp,
-                 linalg::MatmulOp>::insert(patterns, tilingOptions, filter);
-  filter.addFilter([](Operation *op) {
-    return success(isa<linalg::ConvolutionOpInterface>(op));
-  });
-  patterns.add<IREE::LinalgExt::LinalgTilingPattern>(context, tilingOptions,
-                                                     filter);
-}
-
 /// Tiles reduction dimensions.
-static LogicalResult tileReduction(func::FuncOp funcOp,
-                                   ArrayRef<int64_t> tileSizes) {
-  MLIRContext *context = funcOp.getContext();
-
-  // Set markers to drive tiling reduction dimensions.
-  OpBuilder builder(context);
-  auto marker = builder.getStringAttr(getTileReductionMarker());
-  funcOp.walk([&](linalg::LinalgOp op) {
-    if (isa<linalg::ContractionOpInterface>(*op) ||
-        isa<linalg::ConvolutionOpInterface>(*op) ||
-        isa<linalg::GenericOp>(*op)) {
-      op->setAttr(IREE::LinalgExt::LinalgTransforms::kLinalgTransformMarker,
-                  marker);
-    }
-  });
-
-  RewritePatternSet patterns(context);
-  populateTilingReductionPatterns(patterns, tileSizes);
-  if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
-    return funcOp.emitError("failed tiling reduction dimensions");
-  }
+static LogicalResult
+tileReduction(mlir::FunctionOpInterface funcOp,
+              const scf::SCFTileSizeComputationFunction &computeFn) {
+  auto filter =
+      IREE::LinalgExt::LinalgTransformationFilter().setMatchByDefault();
+  auto options =
+      scf::SCFTilingOptions().setTileSizeComputationFunction(computeFn);
+  auto result = tileLinalgOpsWithFilter(funcOp, options, filter);
 
   LLVM_DEBUG({
     llvm::dbgs() << "--- After tiling reduction dimensions  ---\n";
     funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
     llvm::dbgs() << "\n\n";
   });
-  return success();
+  return result;
 }
 
 /// Fuses `tensor.pad` ops into the the materalized loop nests containing
 /// their consumer ops.
-static void fusePadIntoConsumer(func::FuncOp funcOp) {
+static void fusePadIntoConsumer(mlir::FunctionOpInterface funcOp) {
   MLIRContext *context = funcOp.getContext();
   RewritePatternSet patterns(context);
   patterns.insert<linalg::ExtractSliceOfPadTensorSwapPattern>(
@@ -224,7 +179,7 @@ static void fusePadIntoConsumer(func::FuncOp funcOp) {
 };
 
 /// Concretizes `tensor.pad` ops' result shapes.
-static void concretizePadShape(func::FuncOp funcOp) {
+static void concretizePadShape(mlir::FunctionOpInterface funcOp) {
   MLIRContext *context = funcOp.getContext();
   RewritePatternSet patterns(context);
   SmallVector<int64_t> numWorkgroups = getStaticNumWorkgroups(funcOp);
@@ -241,7 +196,7 @@ static void concretizePadShape(func::FuncOp funcOp) {
 
 /// Tiles one of the convolution output window dimensions with size 1 to prepare
 /// for downsizing 2-D convolution ops into 1-D ones.
-static LogicalResult tileAndUnrollConvWindow(func::FuncOp funcOp,
+static LogicalResult tileAndUnrollConvWindow(mlir::FunctionOpInterface funcOp,
                                              ArrayRef<OpFoldResult> tileSizes) {
   SmallVector<linalg::ConvolutionOpInterface, 1> convOps;
   funcOp.walk([&convOps](linalg::ConvolutionOpInterface convOp) {
@@ -252,7 +207,7 @@ static LogicalResult tileAndUnrollConvWindow(func::FuncOp funcOp,
     auto consumerOp = cast<linalg::LinalgOp>(*convOp);
     IRRewriter rewriter(funcOp.getContext());
     FailureOr<scf::SCFTileAndFuseResult> tileAndFuseResult =
-        scf::tileConsumerAndFuseProducerGreedilyUsingSCFForOp(
+        scf::tileConsumerAndFuseProducersUsingSCF(
             rewriter, cast<TilingInterface>(consumerOp.getOperation()),
             scf::SCFTileAndFuseOptions().setTilingOptions(
                 scf::SCFTilingOptions().setTileSizes(tileSizes)));
@@ -273,7 +228,7 @@ static LogicalResult tileAndUnrollConvWindow(func::FuncOp funcOp,
     // for parallel output window dimension, so it helps future vector
     // transformations.
 
-    ArrayRef<Operation *> loops = tileAndFuseResult.value().loops;
+    ArrayRef<LoopLikeOpInterface> loops = tileAndFuseResult.value().loops;
     if (!loops.empty()) {
       assert(loops.size() == 1);
       scf::ForOp loopOp = cast<scf::ForOp>(loops.front());
@@ -309,7 +264,7 @@ public:
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
-    func::FuncOp funcOp = getOperation();
+    auto funcOp = getOperation();
 
     // Try to find computation ops which we will use as anchor to tile and fuse.
     SmallVector<Operation *> computeOps;
@@ -338,9 +293,9 @@ public:
 
     concretizePadShape(funcOp);
 
-    SmallVector<int64_t> reductionTileSizes =
-        loweringConfig->getTileSizeVals(2);
-    if (failed(tileReduction(funcOp, reductionTileSizes))) {
+    auto reductionTileComputeFn = getSPIRVScfTileSizeComputeFn(funcOp, 2);
+    if (failed(reductionTileComputeFn) ||
+        failed(tileReduction(funcOp, reductionTileComputeFn.value()))) {
       return signalPassFailure();
     }
 
@@ -377,9 +332,9 @@ public:
 };
 } // namespace
 
-std::unique_ptr<OperationPass<func::FuncOp>> createSPIRVTilePass() {
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createSPIRVTilePass() {
   return std::make_unique<SPIRVTilePass>();
 }
 
-} // namespace iree_compiler
-} // namespace mlir
+} // namespace mlir::iree_compiler
