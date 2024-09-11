@@ -45,6 +45,17 @@ iree_cc_binary(
     ::simple_mul_module_c
 )
 
+iree_cc_binary(
+  NAME
+    hello_world_two_devices
+  SRCS
+    "hello_world_two_devices.c"
+  DEPS
+    iree::runtime::unified
+    ::simple_mul_module_c
+    ::simple_mul_module_hip_c
+)
+
 iree_native_test(
   NAME
     "hello_world_terse_test"
@@ -61,5 +72,18 @@ iree_bytecode_module(
     "iree_runtime_demo_simple_mul_module"
   FLAGS
     "--iree-hal-target-backends=vmvx"
+  PUBLIC
+)
+
+iree_bytecode_module(
+  NAME
+    simple_mul_module_hip
+  SRC
+    "simple_mul.mlir"
+  C_IDENTIFIER
+    "iree_runtime_demo_simple_mul_module_hip"
+  FLAGS
+    "--iree-hal-target-device=hip"
+    "--iree-hip-target=gfx90a"
   PUBLIC
 )
