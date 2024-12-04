@@ -18,19 +18,24 @@ iree_cc_library(
     "EncodingDialect.h"
     "EncodingDialect.h.inc"
     "EncodingEnums.h.inc"
+    "EncodingInterfaces.h.inc"
     "EncodingOps.h"
     "EncodingOps.h.inc"
+    "EncodingTypes.h"
     "EncodingTypes.h.inc"
   SRCS
+    "EncodingAttrs.cpp"
     "EncodingAttrs.cpp.inc"
     "EncodingDialect.cpp"
     "EncodingDialect.cpp.inc"
     "EncodingEnums.cpp.inc"
+    "EncodingInterfaces.cpp.inc"
     "EncodingOps.cpp"
     "EncodingOps.cpp.inc"
     "EncodingTypes.cpp.inc"
   DEPS
     ::EncodingEnumsGen
+    ::EncodingInterfacesGen
     ::EncodingOpsIncGen
     ::EncodingTypesGen
     LLVMSupport
@@ -63,7 +68,7 @@ iree_tablegen_library(
   NAME
     EncodingEnumsGen
   TD_FILE
-    "EncodingBase.td"
+    "EncodingAttrs.td"
   OUTS
     --gen-enum-decls EncodingEnums.h.inc
     --gen-enum-defs EncodingEnums.cpp.inc
@@ -83,9 +88,19 @@ iree_tablegen_library(
 
 iree_tablegen_library(
   NAME
+    EncodingInterfacesGen
+  TD_FILE
+    "EncodingInterfaces.td"
+  OUTS
+    --gen-attr-interface-decls EncodingInterfaces.h.inc
+    --gen-attr-interface-defs EncodingInterfaces.cpp.inc
+)
+
+iree_tablegen_library(
+  NAME
     EncodingTypesGen
   TD_FILE
-    "EncodingBase.td"
+    "EncodingAttrs.td"
   OUTS
     --gen-attrdef-decls --attrdefs-dialect=iree_encoding EncodingAttrs.h.inc
     --gen-attrdef-defs --attrdefs-dialect=iree_encoding EncodingAttrs.cpp.inc

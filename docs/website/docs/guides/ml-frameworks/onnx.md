@@ -16,7 +16,7 @@ status: new
     Support for a broad set of [ONNX operators](https://onnx.ai/onnx/operators/)
     and [data types](https://onnx.ai/onnx/intro/concepts.html#supported-types)
     is an active investment area. See the
-    [ONNX Op Support tracking issue](https://github.com/nod-ai/SHARK-Turbine/issues/215)
+    [ONNX Op Support tracking issue](https://github.com/nod-ai/SHARK-ModelDev/issues/215)
     for the latest status.
 
 ## :octicons-book-16: Overview
@@ -64,21 +64,22 @@ graph LR
 
         ``` shell
         python -m pip install \
-          iree-compiler[onnx] \
-          iree-runtime
+          iree-base-compiler[onnx] \
+          iree-base-runtime
         ```
 
     === ":material-alert: Nightly releases"
 
-        Nightly releases are published on
+        Nightly pre-releases are published on
         [GitHub releases](https://github.com/iree-org/iree/releases).
 
         ``` shell
         python -m pip install \
           --find-links https://iree.dev/pip-release-links.html \
           --upgrade \
-          iree-compiler[onnx] \
-          iree-runtime
+          --pre \
+          iree-base-compiler[onnx] \
+          iree-base-runtime
         ```
 
 ## :octicons-rocket-16: Quickstart
@@ -106,9 +107,9 @@ graph LR
       -o model_cpu.vmfb
 
     iree-run-module \
-      model_cpu.vmfb \
+      --module=model_cpu.vmfb \
       --device=local-task \
-      --entry_function=... \
+      --function=... \
       --input=... \
       ...
     ```
@@ -118,7 +119,8 @@ graph LR
 | Code samples |  |
 | -- | -- |
 Generated op tests | [iree-test-suites `onnx_ops`](https://github.com/iree-org/iree-test-suites/tree/main/onnx_ops)
-Curated op and model tests | [SHARK-TestSuite `e2eshark/onnx`](https://github.com/nod-ai/SHARK-TestSuite/tree/main/e2eshark/onnx)
+Public model tests | [iree-test-suites `onnx_models`](https://github.com/iree-org/iree-test-suites/tree/main/onnx_models)
+Curated op and model tests | SHARK-TestSuite [`e2eshark/onnx`](https://github.com/nod-ai/SHARK-TestSuite/tree/main/e2eshark/onnx) and [`alt_e2eshark/onnx_tests`](https://github.com/nod-ai/SHARK-TestSuite/tree/main/alt_e2eshark/onnx_tests)
 Importer tests | [torch-mlir `test/python/onnx_importer`](https://github.com/llvm/torch-mlir/tree/main/test/python/onnx_importer)
 
 ## :octicons-question-16: Troubleshooting
@@ -140,7 +142,7 @@ There are several possible scenarios:
 1. The operator is not implemented, or the implementation is missing a case.
    Search for a matching issue in one of these places:
      * <https://github.com/llvm/torch-mlir/issues>
-     * <https://github.com/nod-ai/SHARK-Turbine/issues>
+     * <https://github.com/nod-ai/SHARK-ModelDev/issues>
 2. The operator is implemented but only for a more recent ONNX version. You can
    try upgrading your .onnx file using the
    [ONNX Version Converter](https://github.com/onnx/onnx/blob/main/docs/VersionConverter.md):

@@ -11,12 +11,13 @@
 #define IREE_COMPILER_CODEGEN_DIALECT_LOWERINGCONFIG_H_
 
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenInterfaces.h"
-#include "iree/compiler/Dialect/HAL/IR/HALOps.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "mlir/Dialect/SCF/IR/DeviceMappingInterface.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 
 namespace mlir::iree_compiler {
 /// Typedef for tile sizes to use at different levels of tiling.
@@ -34,10 +35,19 @@ using ScalableTileFlagsListTypeRef = ArrayRef<SmallVector<bool>>;
 // clang-format on
 
 namespace mlir::iree_compiler {
+//===----------------------------------------------------------------------===//
+// Constant names.
+//===----------------------------------------------------------------------===//
+constexpr StringLiteral kConfigAttrName = "lowering_config";
+constexpr StringLiteral kTuningSpecEntrypointAttrName =
+    "iree_codegen.tuning_spec_entrypoint";
+constexpr StringLiteral kSerializedTuningSpecAttrName =
+    "iree_codegen.tuning_spec_mlirbc";
+constexpr StringLiteral kKernelConfigSpecName = "__kernel_config";
 
 //===----------------------------------------------------------------------===//
-// Helpers for getting/setting iree_codegen.translation_info attribute on the
-// `hal.executable.export`
+// Helpers for getting/setting iree_codegen.translation_info attribute on a
+// FunctionOpInterface op.
 //===----------------------------------------------------------------------===//
 
 /// Returns the translation info for the `funcOp`. Returns `nullptr` on failure.
@@ -52,8 +62,8 @@ getWorkgroupSize(mlir::FunctionOpInterface funcOp);
 std::optional<int64_t> getSubgroupSize(mlir::FunctionOpInterface funcOp);
 
 /// Sets and overwites the translate executable info for the given entry point.
-/// Returns failure if the given entry point is not exported via
-/// hal.executable.export.
+/// Returns success() at the end. It is convenient when a caller need to
+/// propagate the state.
 LogicalResult
 setTranslationInfo(mlir::FunctionOpInterface entryPoint,
                    IREE::Codegen::TranslationInfoAttr translationInfo);
@@ -65,8 +75,6 @@ void eraseTranslationInfo(mlir::FunctionOpInterface funcOp);
 // Helpers for getting/setting `iree_codegen.lowering_config` attribute on root
 // operations.
 //===----------------------------------------------------------------------===//
-
-static const char kConfigAttrName[] = "lowering_config";
 
 /// Returns the lowering configuration set for an operation. Returns `nullptr`
 /// if no value is set.  It expects that the attribute is stored using the
@@ -113,6 +121,21 @@ SmallVector<Value> getTileSizes(OpBuilder &b, Operation *op, unsigned level);
 void setLoweringConfig(Operation *op, Attribute config);
 
 /// Convenience function that sets the lowering configuration on the operation
+/// and translation info.
+inline LogicalResult setOpConfigAndEntryPointFnTranslation(
+    mlir::FunctionOpInterface entryPointFn, Operation *op,
+    IREE::Codegen::LoweringConfigAttrInterface config,
+    IREE::Codegen::TranslationInfoAttr translationInfo) {
+  if (config) {
+    setLoweringConfig(op, config);
+  }
+  if (translationInfo) {
+    (void)setTranslationInfo(entryPointFn, translationInfo);
+  }
+  return success();
+}
+
+/// Convenience function that sets the lowering configuration on the operation
 /// and translation info for a generic lowering config, lowering pipeline,
 /// and optional workgroup/subgroup size.
 inline LogicalResult setOpConfigAndEntryPointFnTranslation(
@@ -123,11 +146,11 @@ inline LogicalResult setOpConfigAndEntryPointFnTranslation(
     std::optional<int64_t> subgroupSize = {},
     DictionaryAttr pipelineConfig = DictionaryAttr()) {
   MLIRContext *context = entryPointFn.getContext();
-  setLoweringConfig(op, config);
   auto translationInfo = IREE::Codegen::TranslationInfoAttr::get(
       context, passPipeline, SymbolRefAttr(), workgroupSize, subgroupSize,
       pipelineConfig);
-  return setTranslationInfo(entryPointFn, translationInfo);
+  return setOpConfigAndEntryPointFnTranslation(entryPointFn, op, config,
+                                               translationInfo);
 }
 
 /// Convenience function that sets the lowering configuration on the operation

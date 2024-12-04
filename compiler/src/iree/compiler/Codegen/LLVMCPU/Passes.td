@@ -69,6 +69,13 @@ def LLVMCPUEmitVectorizationRemarksPass :
 def LLVMCPULinkExecutablesPass :
     Pass<"iree-llvmcpu-link-executables", "mlir::ModuleOp"> {
   let summary = "Links LLVMCPU HAL executables within the top-level program module.";
+  let options = [
+    Option<
+      "target", "target",
+      "std::string", "",
+      "Target backend name whose executables will be linked by this pass."
+    >,
+  ];
 }
 
 def LLVMCPULowerExecutableTargetPass :
@@ -185,11 +192,6 @@ def LLVMCPU2DScalableTo1DScalablePass :
 def LLVMCPUUnfuseFMAOpsPass :
     InterfacePass<"iree-llvmcpu-unfuse-fma-pass", "mlir::FunctionOpInterface"> {
   let summary = "Convert llvm.fma into unfused mulf and addf ops";
-}
-
-def LLVMCPUDropVectorUnitDimsPass :
-    InterfacePass<"iree-llvmcpu-drop-vector-unit-dims", "mlir::FunctionOpInterface"> {
-  let summary = "Pass to drop vector unit dims.";
 }
 
 def LLVMCPUVirtualVectorLoweringPass :

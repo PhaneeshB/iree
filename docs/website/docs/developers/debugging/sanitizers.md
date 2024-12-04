@@ -115,8 +115,8 @@ ASAN_SYMBOLIZER_PATH=/usr/lib/llvm-12/bin/llvm-symbolizer \
     `PYTHONPATH` pointing at your build directory:
 
     ```shell hl_lines="14-18"
-    python -m pip uninstall iree-runtime
-    python -m pip uninstall iree-compiler
+    python -m pip uninstall iree-base-runtime
+    python -m pip uninstall iree-base-compiler
     source iree-build/.env && export PYTHONPATH
 
     LD_PRELOAD=/usr/lib/llvm-12/lib/clang/12.0.0/lib/linux/libclang_rt.asan-x86_64.so \
@@ -154,6 +154,35 @@ ASAN_SYMBOLIZER_PATH=/usr/lib/llvm-12/bin/llvm-symbolizer \
     ```
 
 ### TSan (ThreadSanitizer)
+
+To enable TSan:
+
+```shell
+cmake -DIREE_ENABLE_TSAN=ON ...
+```
+
+You may also need:
+
+* Depending on your system (see
+  <https://github.com/google/benchmark/issues/773#issuecomment-616067912>):
+
+    ```shell
+    -DRUN_HAVE_STD_REGEX=0 \
+    -DRUN_HAVE_POSIX_REGEX=0 \
+    -DCOMPILE_HAVE_GNU_POSIX_REGEX=0 \
+    ```
+
+* For clang < 18.1.0 on system with `vm.mmap_rnd_bits` > 28 (see
+  <https://stackoverflow.com/a/77856955>):
+
+    ```shell
+    sudo sysctl vm.mmap_rnd_bits=28
+    ```
+
+    TSan in LLVM >= 18.1.0 supports 30 bits of ASLR entropy. If the layout is
+    unsupported, TSan will automatically re-execute without ASLR.
+
+* If running under Docker, add `--privileged` to your `docker run` command
 
 #### C++ Standard Library with TSan support
 

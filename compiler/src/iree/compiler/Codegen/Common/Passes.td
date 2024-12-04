@@ -19,6 +19,12 @@ def AddFastMathFlagsPass
                 "given a floating-point mode.";
 }
 
+def BlockDynamicDimensionsPass
+    : Pass<"iree-codegen-block-dynamic-dimensions"> {
+  let summary = "Expand dynamic dimensions that are known to be multiples of "
+                "statically known values.";
+}
+
 def BubbleUpOrdinalOpsPass : Pass<"iree-codegen-bubble-up-ordinal-ops", ""> {
   let summary = "Bubbles op ordinal ops to allow for workgroup count computation";
   let description = [{
@@ -36,6 +42,15 @@ def BufferizeCopyOnlyDispatchesPass :
     another. This will create a `linalg.generic` op which is a copy that can
     then be used by backends to handle appropriately.
   }];
+}
+
+def ConfigTrackingCanonicalizerPass :
+    Pass<"iree-codegen-config-tracking-canonicalize", ""> {
+  let summary = "Codegen specific canonicalization pass that tracks lowering configs";
+  let options = [
+    Option<"testConvergence", "test-convergence", "bool",
+           /*default=*/"false", "Fails if the patterns fail to converge">
+  ];
 }
 
 def CleanupBufferAllocViewPass :
@@ -76,6 +91,16 @@ def ConvertToDestinationPassingStylePass :
     Option<"useWARForCooperativeMatrixCodegen", "use-war-for-cooperative-matrix-codegen",
            "bool", /*default=*/"false",
            "WAR for failure in Cooperative matrix codegen pipelines. See #10648.">
+  ];
+}
+
+def ConvolutionToIGEMMPass :
+    InterfacePass<"iree-codegen-convolution-to-igemm", "mlir::FunctionOpInterface"> {
+  let summary =
+      "Transforms convolution operations into an implicit GEMM format.";
+  let dependentDialects = [
+    "tensor::TensorDialect",
+    "iree_compiler::IREE::LinalgExt::IREELinalgExtDialect"
   ];
 }
 
@@ -123,12 +148,6 @@ def DecomposeAffineOpsPass: Pass<"iree-codegen-decompose-affine-ops"> {
   ];
 }
 
-def ConvolutionToIGEMMPass :
-    InterfacePass<"iree-codegen-convolution-to-igemm", "mlir::FunctionOpInterface"> {
-  let summary =
-      "Transforms convolution operations into an implicit GEMM format.";
-}
-
 def DecomposeConvolutionToLowerDimOpsPass :
     Pass<"iree-codegen-decompose-convolution-to-lower-dim-ops", ""> {
   let summary = "Decomposes linalg convolution ops to lower dim ops";
@@ -153,7 +172,30 @@ def DecomposePackUnPackOpsPass :
   let summary = "Decompose pack/unpack ops into vectorizable ops";
   let options = [
     Option<"tileOuterToOne", "tile-outer-to-one", "bool", "false",
+           "Always apply tiling to make outer dimension be ones">,
+    Option<"useOnlyReshapes", "use-only-reshapes", "bool", "false",
+           "Use decomposition into reshape ops, even when packing unit dimensions.">
+  ];
+  let dependentDialects = [
+    "arith::ArithDialect",
+    "linalg::LinalgDialect",
+    "scf::SCFDialect",
+    "tensor::TensorDialect"
+  ];
+}
+
+def DecomposeBoundaryPackUnPackOpsPass :
+    InterfacePass<"iree-codegen-decompose-boundary-pack-unpack-ops", "mlir::FunctionOpInterface"> {
+  let summary = "Wrapper for DecomposePackUnPackOpsPass to decompose ops at function boundaries";
+  let options = [
+    Option<"tileOuterToOne", "tile-outer-to-one", "bool", "false",
            "Always apply tiling to make outer dimension be ones">
+  ];
+  let dependentDialects = [
+    "arith::ArithDialect",
+    "linalg::LinalgDialect",
+    "scf::SCFDialect",
+    "tensor::TensorDialect"
   ];
 }
 
@@ -166,6 +208,11 @@ def DecomposeSoftmaxPass :
            "bool", /*default=*/"true",
            "Whether to use the internal pass fusion logic for the exp function. See #15862.">
   ];
+}
+
+def DropVectorUnitDimsPass :
+    InterfacePass<"iree-codegen-drop-vector-unit-dims", "mlir::FunctionOpInterface"> {
+  let summary = "Pass to drop vector unit dims.";
 }
 
 def ReconcileTranslationInfoPass
@@ -279,6 +326,8 @@ def GenericVectorizationPass :
       "Enable vector masking during vectorization.">,
     Option<"useConfiguredVectorSizes", "use-configured-vector-sizes", "bool",/*default=*/"true",
       "Control whether the op lowering config represents a set of masked vector sizes">,
+    Option<"vectorizeCopies", "vectorize-copies", "bool", /*default=*/"true",
+      "Enable vectorization of linalg.copy operations.">,
     Option<"vectorizePadding", "vectorize-padding", "bool", /*default=*/"false",
       "Rewrite all tensor.pad ops in the function to vector form.">,
     Option<"vectorizeGatherAccesses", "vectorize-gather-accesses", "bool", /*default=*/"false",
@@ -357,6 +406,21 @@ def InstrumentMemoryAccessesPass :
   let summary = "Instruments memory reads and writes for address tracking when dispatch instrumentation is enabled.";
 }
 
+def LinkTuningSpecsPass : Pass<"iree-codegen-link-tuning-specs", "ModuleOp"> {
+  let summary =
+      "Link nested transform dialect tuning specs named sequences into a single entry point";
+  let description = [{
+    Given a module with multiple nested tuning specs, introduce a new named sequence
+    that includes all the other tuning spec entry points. The order of inclusion is the same
+    as the order in which these nested tuning specs appear in the IR.
+
+    A tuning spec entry point is a `transform.named_sequence` op annotated with the
+    `iree_codegen.tuning_spec` unit attribute. We require it to perform in-place op
+    modification and not consume the handle.
+  }];
+  let dependentDialects = ["transform::TransformDialect"];
+}
+
 def LowerExecutableUsingTransformDialectPass :
     Pass<"iree-codegen-lower-executable-using-transform-dialect", "ModuleOp"> {
   let summary = "Lower executables using the transform dialect recipe provided in the module.";
@@ -370,6 +434,25 @@ def LowerUKernelOpsToCallsPass :
 def MaterializeEncodingIntoNopPass :
     InterfacePass<"iree-codegen-materialize-encoding-into-nop", "mlir::FunctionOpInterface"> {
   let summary = "Drop the encodings from tensor types with encodings.";
+}
+
+def MaterializeTuningSpecsPass : Pass<"iree-codegen-materialize-tuning-specs", "ModuleOp"> {
+  let summary =
+      "Load tuning spec transform dialect libraries and encode them in the module";
+  let description = [{
+    Links all available tuning spec transform dialect modules into a single
+    tuning spec. Next, serializes this tuning spec to bytecode and attaches it
+    as a module attribute. We do this so that the full tuning spec is always
+    encoded in the program IR and can be checked with `--mlir-print-ir-after-all`
+    (or equivalent). The alternative would be to add the tuning spec as a
+    submodule in the compiled program, but this may result in the tuning spec
+    being inadvertently visited by other passes that attempt to `walk` the outer
+    module. Serialization makes the tuning specs opaque and prevents it from
+    happening.
+
+    This attribute is expected to be short-lived and removed by
+    `iree-codegen-materialize-user-configs`.
+  }];
 }
 
 def MaterializeUserConfigsPass : Pass<"iree-codegen-materialize-user-configs", "ModuleOp"> {
@@ -410,6 +493,8 @@ def OptimizeVectorTransferPass :
   let options = [
     Option<"flatten", "flatten", "bool", "false",
            "Flatten the vector type of vector transfers where possible (contiguous row-major data).">,
+    Option<"redundantHoisting", "redundant-hoisting", "bool", "true",
+           "Enables use of redundant vector transfer hoisting.">,
   ];
   let dependentDialects = [
       "memref::MemRefDialect"
@@ -443,6 +528,26 @@ def RematerializeParallelOpsPass :
 def RemoveSingleIterationLoopPass :
     InterfacePass<"iree-codegen-remove-single-iteration-loop", "mlir::FunctionOpInterface"> {
   let summary = "Remove distributed loop with single iteration.";
+}
+
+def StripCompilationInfoPass :
+    Pass<"iree-codegen-strip-compilation-info", "">{
+   let summary = "Remove all the the lowering configuration and translation info attributes.";
+}
+
+// TODO: Replace with upstream: https://github.com/iree-org/iree/issues/18759
+def IREELoopInvariantCodeMotionPass :
+  Pass<"iree-loop-invariant-code-motion", ""> {
+  let summary = "Performs LICM on loops guaranteed to have >= 1 trip";
+  let description = [{
+    This is a mirror of the upstream LICM pass that restricts to loops that are
+    guaranteed to have at least one trip. This currently only supports loops
+    that expose a lower and upper bound as the generic loop-like interface does
+    not expose a way to query for trip count.
+
+    Additionally code motion of `scf.forall` ops with mappings is always unsafe
+    and is explicitly disabled.
+  }];
 }
 
 def SplitFullPartialTransferPass :
@@ -514,6 +619,21 @@ def TileAndDistributeToWorkgroupsUsingForallOpPass :
   ];
 }
 
+def TileLargeTensorsPass :
+    InterfacePass<"iree-codegen-tile-large-tensors", "mlir::FunctionOpInterface"> {
+  let summary = "Greedily tiles all linalg ops that are beyond a certain size";
+  let dependentDialects = [
+    "::mlir::arith::ArithDialect",
+    "::mlir::affine::AffineDialect",
+    "::mlir::scf::SCFDialect",
+  ];
+  let options = [
+    Option<"maxVectorSize", "max-vector-size", "int64_t",
+           /*default=*/"64",
+           "Maximum static size to tile to (i.e. all remaining ops will be smaller)">,
+  ];
+}
+
 def TransformDialectInterpreterPass :
     Pass<"iree-transform-dialect-interpreter"> {
   let summary = "Pass to apply transform dialect operations.";
@@ -537,9 +657,25 @@ def TypePropagationPass :
   let summary = "Propogate the type of tensor to avoid load/stores of illegal bit widths";
 }
 
+def UnrollAnnotatedLoopsPass :
+    InterfacePass<"iree-codegen-unroll-annotated-loops", "mlir::FunctionOpInterface"> {
+  let summary = "Unrolls all scf.for loops marked with `unroll_loop`";
+}
+
 def VectorizeMemrefCopyPass :
     Pass<"iree-codegen-vectorize-memref-copy", ""> {
   let summary = "Vectorizes memref copy operations.";
+}
+
+def VerifyWorkgroupDistributionPass :
+    InterfacePass<"iree-codegen-verify-workgroup-distribution", "mlir::FunctionOpInterface"> {
+  let summary = "Pass to verify proper distribution to workgroups.";
+  let description = [{
+    Pass to verify that all writes to global memory are explicitly mapped to
+    workgroups. This means that in cases where we use loops (scf.forall) to
+    manage distribution to workgroups, we require that all ops with write
+    side effects are contained within a workgroup distributed loop.
+  }];
 }
 
 #endif // IREE_CODEGEN_COMMON_PASSES

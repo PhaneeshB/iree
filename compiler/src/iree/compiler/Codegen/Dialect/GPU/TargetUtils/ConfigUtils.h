@@ -7,11 +7,28 @@
 #ifndef IREE_COMPILER_CODEGEN_DIALECT_GPU_TARGETUTILS_CONFIGUTILS_H_
 #define IREE_COMPILER_CODEGEN_DIALECT_GPU_TARGETUTILS_CONFIGUTILS_H_
 
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenAttrs.h"
 #include "iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUAttrs.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 
 namespace mlir::iree_compiler::IREE::GPU {
+
+/// Helper for setting up a data tiled multi_mma config based on the specified
+/// target.
+LogicalResult
+setDataTiledMultiMmaLoweringConfig(IREE::GPU::TargetAttr target,
+                                   mlir::FunctionOpInterface entryPoint,
+                                   Operation *op);
+
+/// Helper for setting up a convolution config using IGEMM based on the
+/// specified target.
+/// TODO: Currently this only succeeds if the target supports an mma
+/// kind. Add support for a fallback direct lowering path.
+LogicalResult
+setIGEMMConvolutionLoweringConfig(IREE::GPU::TargetAttr target,
+                                  mlir::FunctionOpInterface entryPoint,
+                                  Operation *op);
 
 /// Helper for setting up a matmul config based on the specified target.
 /// TODO: Currently this only succeeds if the target supports an mma
@@ -25,6 +42,27 @@ LogicalResult setMatmulLoweringConfig(IREE::GPU::TargetAttr target,
 LogicalResult setTileAndFuseLoweringConfig(IREE::GPU::TargetAttr target,
                                            mlir::FunctionOpInterface entryPoint,
                                            Operation *op);
+
+//===----------------------------------------------------------------------===//
+// Pass Pipeline Options
+//===----------------------------------------------------------------------===//
+
+using IREE::GPU::ReorderWorkgroupsStrategy;
+
+struct GPUPipelineOptions {
+  bool enableReduceSharedMemoryBankConflicts = true;
+  bool prefetchSharedMemory = false;
+  bool useIgemmConvolution = false;
+  bool enableUkernels = false;
+  std::optional<ReorderWorkgroupsStrategy> reorderStrategy;
+};
+
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
+                              const GPUPipelineOptions &options);
+
+GPUPipelineOptions
+getPipelineOptions(FunctionOpInterface funcOp,
+                   IREE::Codegen::TranslationInfoAttr translationInfo);
 
 } // namespace mlir::iree_compiler::IREE::GPU
 

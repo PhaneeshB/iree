@@ -18,6 +18,25 @@ struct OneShotBufferizationOptions;
 
 namespace mlir::iree_compiler {
 
+/// Common helper class for tracking lowering configs through pattern
+/// applications.
+class ConfigTrackingListener : public RewriterBase::Listener {
+public:
+  ConfigTrackingListener() = default;
+  void notifyOperationReplaced(Operation *op, ValueRange replacement) override;
+};
+
+using IGEMMConfigFn =
+    std::function<LogicalResult(linalg::GenericOp, IREE::LinalgExt::Im2colOp)>;
+using IGEMMControlFn = std::function<bool(Operation *)>;
+
+/// Converts conv_2d ops into linalg_ext.im2col + matmul, and sets a lowering
+/// configuration on the matmul.
+LogicalResult convertToIGEMMAndSetConfig(
+    FunctionOpInterface funcOp,
+    std::optional<IGEMMConfigFn> configFn = std::nullopt,
+    std::optional<IGEMMControlFn> controlFn = std::nullopt);
+
 /// Eliminates tensor.empty ops to avoid buffer allocations.
 LogicalResult eliminateEmptyTensors(
     RewriterBase &rewriter, Operation *op,

@@ -1,9 +1,9 @@
 # Builds release packages on supported platforms:
 #   * main-dist-linux (CMake 'install')
-#   * py-compiler-pkg (`iree-compiler` Python package)
+#   * py-compiler-pkg (`iree-base-compiler` Python package)
 #     * Linux, macOS, Windows
 #     * All supported Python versions (e.g. 3.9, 3.10, 3.11)
-#   * py-runtime-pkg (`iree-runtime` Python package)
+#   * py-runtime-pkg (`iree-base-runtime` Python package)
 #     * Linux, macOS, Windows
 #     * All supported Python versions (e.g. 3.9, 3.10, 3.11)
 #   * py-tf-compiler-tools-pkg (`iree-tools-[tf, tflite]`, pure Python packages)
@@ -18,10 +18,19 @@ on:
         description: "Suffix to append to package names"
         required: false
         default: ""
-      package_version:
+      legacy_package_version:
         description: "Version of the package"
         required: true
         default: "0.1a1"
+      package_version:
+        description: "Version of the package"
+        required: true
+      compiler_package_version:
+        description: "Version of the iree-base-compiler package"
+        required: true
+      runtime_package_version:
+        description: "Version of the iree-base-runtime package"
+        required: true
       release_id:
         description: "Release id to upload artifacts to"
         default: ""
@@ -30,8 +39,78 @@ on:
         default: ""
 
 jobs:
+  # Note: For cross platform builds, it's useful to just generate the
+  # metadata on Linux and pass that to later jobs using artifacts. The
+  # metadata generation could also happen in a separate workflow and
+  # might be moved.
+  setup_metadata:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          path: "c" # Windows can hit path length limits, so use a short path.
+          submodules: false
+          ref: ${{ github.event.inputs.commit }}
+
+      - name: Write version info (release)
+        id: version_local
+        shell: bash
+        run: |
+          # Note: `version_info.json` holds the CalVer version and is still used
+          # for iree-tools-tf and iree-tools-tflite.
+          cat << EOF > ./c/version_info.json
+          {
+            "package-suffix": "${{ github.event.inputs.package_suffix }}",
+            "package-version": "${{ github.event.inputs.legacy_package_version }}",
+            "iree-revision": "$(cd ./c && git rev-parse HEAD)"
+          }
+          EOF
+          cat ./c/version_info.json
+
+          echo "iree-dist"
+          cat << EOF > ./c/version_local.json
+          {
+            "package-suffix": "${{ github.event.inputs.package_suffix }}",
+            "package-version": "${{ github.event.inputs.package_version }}",
+            "iree-revision": "$(cd ./c && git rev-parse HEAD)"
+          }
+          EOF
+          cat ./c/version_local.json
+
+          echo "iree-base-compiler"
+          cat << EOF > ./c/compiler/version_local.json
+          {
+            "package-suffix": "${{ github.event.inputs.package_suffix }}",
+            "package-version": "${{ github.event.inputs.compiler_package_version }}",
+            "iree-revision": "$(cd ./c && git rev-parse HEAD)"
+          }
+          EOF
+          cat ./c/compiler/version_local.json
+
+          echo "iree-base-runtime"
+          cat << EOF > ./c/runtime/version_local.json
+          {
+            "package-suffix": "${{ github.event.inputs.package_suffix }}",
+            "package-version": "${{ github.event.inputs.runtime_package_version }}",
+            "iree-revision": "$(cd ./c && git rev-parse HEAD)"
+          }
+          EOF
+          cat ./c/runtime/version_local.json
+
+      - name: Upload version_local.json
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+        with:
+          name: version_local
+          path: |
+            ./c/version_info.json
+            ./c/version_local.json
+            ./c/compiler/version_local.json
+            ./c/runtime/version_local.json
+
   build_packages:
     name: "${{ matrix.build-family }} :: Build ${{ matrix.build-package }} Package"
+    needs: setup_metadata
     runs-on: ${{ matrix.runs-on }}
     continue-on-error: ${{ matrix.experimental }}
     strategy:
@@ -43,8 +122,7 @@ jobs:
             build-family: linux-x86_64
             build-package: main-dist-linux
             experimental: false
-          - runs-on:
-              [self-hosted, arm64, os-family=Linux, runner-group=postsubmit]
+          - runs-on: ah-ubuntu_22_04-c7g_4x-50
             build-family: linux-aarch64
             build-package: main-dist-linux
             experimental: true
@@ -52,8 +130,7 @@ jobs:
             build-family: linux-x86_64
             build-package: py-compiler-pkg
             experimental: false
-          - runs-on:
-              [self-hosted, arm64, os-family=Linux, runner-group=postsubmit]
+          - runs-on: ah-ubuntu_22_04-c7g_4x-50
             build-family: linux-aarch64
             build-package: py-compiler-pkg
             experimental: true
@@ -61,8 +138,7 @@ jobs:
             build-family: linux-x86_64
             build-package: py-runtime-pkg
             experimental: false
-          - runs-on:
-              [self-hosted, arm64, os-family=Linux, runner-group=postsubmit]
+          - runs-on: ah-ubuntu_22_04-c7g_4x-50
             build-family: linux-aarch64
             build-package: py-runtime-pkg
             experimental: true
@@ -101,7 +177,7 @@ jobs:
 
     env:
       # These are also set in: build_tools/python_deploy/build_linux_packages.sh
-      MANYLINUX_X86_64_IMAGE: ghcr.io/iree-org/manylinux_x86_64@sha256:facedb71df670016e74e646d71e869e6fff70d4cdbaa6634d4d0a10d6e174399
+      MANYLINUX_X86_64_IMAGE: ghcr.io/iree-org/manylinux_x86_64@sha256:2e0246137819cf10ed84240a971f9dd75cc3eb62dc6907dfd2080ee966b3c9f4
       MANYLINUX_AARCH64_IMAGE: quay.io/pypa/manylinux_2_28_aarch64
 
     steps:
@@ -122,38 +198,21 @@ jobs:
       - name: "Configure MSVC (Windows)"
         if: "matrix.build-family == 'windows'"
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Install dependencies (macOS)
+        if: "matrix.build-family == 'macos'"
+        run: sudo ./c/build_tools/python_deploy/install_macos_deps.sh
 
       ##########################################################################
-      # Write version_info.json
+      # Download version_info.json
       # Various tools will read this in order to embed release information.
       ##########################################################################
-      - name: Write version info (release)
-        if: "matrix.build-family != 'windows'"
-        shell: bash
-        run: |
-          cat << EOF > ./c/version_info.json
-          {
-            "package-suffix": "${{ github.event.inputs.package_suffix }}",
-            "package-version": "${{ github.event.inputs.package_version }}",
-            "iree-revision": "$(cd ./c && git rev-parse HEAD)"
-          }
-          EOF
-          cat ./c/version_info.json
 
-      - name: Write version info Windows (release)
-        if: "matrix.build-family == 'windows'"
-        shell: powershell
-        run: |
-          cd c
-          $verinfoprop = @{
-            'package-suffix'= "${{ github.event.inputs.package_suffix }}"
-            'package-version'= "${{ github.event.inputs.package_version }}"
-            'iree-revision'= $(git rev-parse HEAD)
-          }
-
-          $info = New-Object -TypeName PSObject -Prop $verinfoprop
-          $info = $info | ConvertTo-JSON
-          $info | Out-File "version_info.json" -Encoding "ASCII"
+      - name: Download version_local.json
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: version_local
+          path: ./c/
+          merge-multiple: true
 
       ##########################################################################
       # Build the main distribution tarball.
@@ -187,7 +246,7 @@ jobs:
 
       ##########################################################################
       # py-runtime-pkg
-      # Builds the iree-runtime wheels.
+      # Builds the iree-base-runtime wheels.
       # One step per OS.
       ##########################################################################
 
@@ -196,7 +255,7 @@ jobs:
         shell: bash
         env:
           package_suffix: ${{ github.event.inputs.package_suffix }}
-          packages: "iree-runtime"
+          packages: "iree-base-runtime"
           output_dir: "${{ github.workspace }}/bindist"
         run: |
           [ -e ./bindist/* ] && rm ./bindist/*
@@ -207,9 +266,9 @@ jobs:
         shell: bash
         env:
           package_suffix: ${{ github.event.inputs.package_suffix }}
-          packages: "iree-runtime"
+          packages: "iree-base-runtime"
           output_dir: "${{ github.workspace }}/bindist"
-          override_python_versions: "3.11 3.12"
+          override_python_versions: "3.11 3.12 3.13"
         run: |
           [ -e ./bindist/* ] && rm ./bindist/*
           ./c/build_tools/python_deploy/build_macos_packages.sh
@@ -219,9 +278,9 @@ jobs:
         shell: powershell
         env:
           package_suffix: ${{ github.event.inputs.package_suffix }}
-          packages: "iree-runtime"
+          packages: "iree-base-runtime"
           output_dir: "${{ github.workspace }}/bindist"
-          override_python_versions: "3.11 3.12"
+          override_python_versions: "3.11 3.12 3.13"
         run: |
           if (Test-Path -Path "${{ github.workspace }}/bindist") {
             Remove-Item -Path "${{ github.workspace }}/bindist" -Recurse -Force
@@ -230,7 +289,7 @@ jobs:
 
       ##########################################################################
       # py-compiler-pkg
-      # Builds the iree-compiler wheel.
+      # Builds the iree-base-compiler wheel.
       # One step per OS.
       ##########################################################################
       - name: Build compiler wheels (Linux, x86_64 and Arm64)
@@ -238,7 +297,7 @@ jobs:
         shell: bash
         env:
           package_suffix: ${{ github.event.inputs.package_suffix }}
-          packages: "iree-compiler"
+          packages: "iree-base-compiler"
           output_dir: "${{ github.workspace }}/bindist"
         run: |
           [ -e ./bindist/* ] && rm ./bindist/*
@@ -249,9 +308,9 @@ jobs:
         shell: bash
         env:
           package_suffix: ${{ github.event.inputs.package_suffix }}
-          packages: "iree-compiler"
+          packages: "iree-base-compiler"
           output_dir: "${{ github.workspace }}/bindist"
-          override_python_versions: "3.11 3.12"
+          override_python_versions: "3.11 3.12 3.13"
         run: |
           [ -e ./bindist/* ] && rm ./bindist/*
           ./c/build_tools/python_deploy/build_macos_packages.sh
@@ -261,9 +320,9 @@ jobs:
         shell: powershell
         env:
           package_suffix: ${{ github.event.inputs.package_suffix }}
-          packages: "iree-compiler"
+          packages: "iree-base-compiler"
           output_dir: "${{ github.workspace }}/bindist"
-          override_python_versions: "3.11 3.12"
+          override_python_versions: "3.11 3.12 3.13"
         run: |
           if (Test-Path -Path "${{ github.workspace }}/bindist") {
             Remove-Item -Path "${{ github.workspace }}/bindist" -Recurse -Force

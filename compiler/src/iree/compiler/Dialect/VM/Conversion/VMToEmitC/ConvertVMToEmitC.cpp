@@ -45,22 +45,6 @@ enum {
   CCONV_ARGUMENT_MODULE_STATE,
 };
 
-/// Create a call to memset to clear a struct
-LogicalResult clearStruct(OpBuilder builder, Value structValue) {
-  auto loc = structValue.getLoc();
-
-  if (auto ptrType =
-          llvm::dyn_cast<emitc::PointerType>(structValue.getType())) {
-    Value sizeValue = emitc_builders::sizeOf(
-        builder, loc, TypeAttr::get(ptrType.getPointee()));
-    emitc_builders::memset(builder, loc, structValue, 0, sizeValue);
-
-    return success();
-  }
-
-  return emitError(loc, "expected pointer type");
-}
-
 LogicalResult convertFuncOp(IREE::VM::FuncOp funcOp,
                             const IREE::VM::EmitCTypeConverter &typeConverter,
                             SmallVector<BlockArgument> &blockArgsToRemove) {
@@ -138,20 +122,13 @@ LogicalResult convertFuncOp(IREE::VM::FuncOp funcOp,
   builder.setInsertionPointToStart(&entryBlock);
 
   for (int i = 0; i < numLocalRefs; i++) {
-    auto ref = emitc_builders::allocateVariable(
+    auto [ref, refPtr] = emitc_builders::allocZeroInitializedVar(
         builder, loc, emitc::OpaqueType::get(ctx, "iree_vm_ref_t"));
-
-    Value refPtr = emitc_builders::addressOf(builder, loc, ref);
-    auto refPtrOp = cast<emitc::ApplyOp>(refPtr.getDefiningOp());
 
     // Cache local refs so that we can release them before a return operation.
     // Here we rely on the fact that the register allocation maps arguments in
     // the first slots.
-    funcAnalysis.cacheLocalRef(i + numRefArgs, refPtrOp);
-
-    if (failed(clearStruct(builder, refPtr))) {
-      return failure();
-    }
+    funcAnalysis.cacheLocalRef(i + numRefArgs, refPtr);
   }
 
   for (Block &block : llvm::drop_begin(newFuncOp.getBlocks(), 1)) {
@@ -315,14 +292,8 @@ LogicalResult retainOrMoveRefs(OpBuilder &builder, Location location,
     assert(srcRef.getType() == emitc::PointerType::get(emitc::OpaqueType::get(
                                    ctx, "iree_vm_ref_t")));
 
-    auto tmpRef = emitc_builders::allocateVariable(
+    auto [tmpRef, tmpPtr] = emitc_builders::allocZeroInitializedVar(
         builder, location, emitc::OpaqueType::get(ctx, "iree_vm_ref_t"));
-
-    Value tmpPtr = emitc_builders::addressOf(builder, location, tmpRef);
-
-    if (failed(clearStruct(builder, tmpPtr))) {
-      return failure();
-    }
 
     StringRef callee = isMove ? "iree_vm_ref_move" : "iree_vm_ref_retain";
     builder.create<emitc::CallOpaqueOp>(
@@ -359,13 +330,7 @@ void releaseRefs(OpBuilder &builder, Location location,
 
   if (funcAnalysis.hasLocalRefs()) {
 
-    for (auto pair : funcAnalysis.localRefs()) {
-      Operation *op = pair.second;
-
-      assert(isa<emitc::ApplyOp>(op));
-
-      Value localRef = cast<emitc::ApplyOp>(op).getResult();
-
+    for (auto &[key, localRef] : funcAnalysis.localRefs()) {
       emitc_builders::ireeVmRefRelease(builder, location, localRef);
     }
   }
@@ -735,35 +700,6 @@ LogicalResult createAPIFunctions(IREE::VM::ModuleOp moduleOp,
                                builder.getIndexAttr(2)}));
     }
 
-    // Zero out refs from state struct.
-    auto ordinalCounts = moduleOp.getOrdinalCountsAttr();
-    if (!ordinalCounts) {
-      return moduleOp.emitError()
-             << "ordinal_counts attribute not found. The OrdinalAllocationPass "
-                "must be run before.";
-    }
-    const int numGlobalRefs = ordinalCounts.getGlobalRefs();
-
-    if (numGlobalRefs > 0) {
-      auto refs =
-          cast<TypedValue<emitc::PointerType>>(emitc_builders::structPtrMember(
-              builder, loc,
-              /*type=*/
-              emitc::PointerType::get(
-                  emitc::OpaqueType::get(ctx, "iree_vm_ref_t")),
-              /*memberName=*/"refs",
-              /*operand=*/state));
-
-      for (int i = 0; i < numGlobalRefs; i++) {
-        auto refPtrOp = emitc_builders::arrayElementAddress(
-            builder, loc, /*index=*/i, /*operand=*/refs);
-
-        if (failed(clearStruct(builder, refPtrOp))) {
-          return failure();
-        }
-      }
-    }
-
     auto baseStateOp = builder.create<emitc::CastOp>(
         /*location=*/loc,
         /*type=*/
@@ -862,6 +798,55 @@ LogicalResult createAPIFunctions(IREE::VM::ModuleOp moduleOp,
         /*operands=*/ArrayRef<Value>{allocatorOp, stateOp.getResult()});
 
     builder.create<mlir::emitc::ReturnOp>(loc, nullptr);
+  }
+
+  // iree_status_t fork_state(
+  //   void* self,
+  //   iree_vm_module_state_t* parent_state,
+  //   iree_allocator_t allocator,
+  //   iree_vm_module_state_t** out_child_state
+  // )
+  {
+    OpBuilder::InsertionGuard guard(builder);
+
+    // const int parentStateArgIndex = 1;
+    // const int allocatorArgIndex = 2;
+    // const int childStateArgIndex = 3;
+
+    auto funcType = mlir::FunctionType::get(
+        ctx,
+        {emitc::PointerType::get(emitc::OpaqueType::get(ctx, "void")),
+         emitc::PointerType::get(
+             emitc::OpaqueType::get(ctx, "iree_vm_module_state_t")),
+         emitc::OpaqueType::get(ctx, "iree_allocator_t"),
+         emitc::PointerType::get(emitc::PointerType::get(
+             emitc::OpaqueType::get(ctx, "iree_vm_module_state_t")))},
+        {emitc::OpaqueType::get(ctx, "iree_status_t")});
+
+    auto funcOp = builder.create<mlir::emitc::FuncOp>(
+        loc, moduleName + "_fork_state", funcType);
+    funcOp.setSpecifiersAttr(
+        builder.getArrayAttr({builder.getStringAttr("static")}));
+    funcOp.setPrivate();
+
+    moduleAnalysis.addDummy(funcOp, /*emitAtEnd=*/false);
+
+    Block *entryBlock = funcOp.addEntryBlock();
+
+    builder.setInsertionPointToStart(entryBlock);
+
+    // TODO: someone will need to do what the bytecode module does in order to
+    // support forking. For now we don't support forking emitc contexts.
+    auto statusOp = builder.create<emitc::CallOpaqueOp>(
+        /*location=*/loc,
+        /*type=*/emitc::OpaqueType::get(ctx, "iree_status_t"),
+        /*callee=*/"iree_make_status",
+        /*operands=*/ArrayRef<Value>{},
+        /*args=*/
+        ArrayAttr::get(
+            ctx, {emitc::OpaqueAttr::get(ctx, "IREE_STATUS_UNIMPLEMENTED")}));
+
+    builder.create<mlir::emitc::ReturnOp>(loc, statusOp.getResult(0));
   }
 
   // iree_status_t resolve_import(
@@ -1102,8 +1087,8 @@ LogicalResult createAPIFunctions(IREE::VM::ModuleOp moduleOp,
     builder.setInsertionPointToStart(continuationBlock);
 
     // Set function pointers
-    for (std::string funcName :
-         {"destroy", "alloc_state", "free_state", "resolve_import"}) {
+    for (std::string funcName : {"destroy", "alloc_state", "free_state",
+                                 "fork_state", "resolve_import"}) {
       // The type doesn't matter, the result gets inlined into it's uses anyway.
       Type type = emitc::PointerType::get(emitc::OpaqueType::get(ctx, "void"));
 
@@ -2029,6 +2014,11 @@ public:
   }
 
 private:
+  struct MaybeZeroValue {
+    Value value;
+    bool isZero;
+  };
+
   LogicalResult createVariadicImportShims(IREE::VM::ImportOp &importOp,
                                           OpBuilder &builder) const {
     SetVector<const void *> arities;
@@ -2144,23 +2134,18 @@ private:
 
       builder.setInsertionPointToStart(block);
 
-      auto argumentSize = buildSizeExpression(
+      MaybeZeroValue argumentSize = buildSizeExpression(
           flattenInputTypes(importOp, segmentSizes, builder), builder, loc);
-      auto resultSize =
+      MaybeZeroValue resultSize =
           buildSizeExpression(importOp.getResultTypes(), builder, loc);
-
-      if (failed(argumentSize) || failed(resultSize)) {
-        return importOp.emitError()
-               << "Failed to build size expressions for call struct";
-      }
 
       const int importArgIndex = 1;
       const BlockArgument importArg = newFuncOp.getArgument(importArgIndex);
       auto importArgLValue = emitc_builders::asLValue(builder, loc, importArg);
       failIfImportUnresolved(builder, loc, importArgLValue);
 
-      auto call = buildIreeVmFunctionCallStruct(
-          importArg, argumentSize.value(), resultSize.value(), builder, loc);
+      auto call = buildIreeVmFunctionCallStruct(importArg, argumentSize,
+                                                resultSize, builder, loc);
 
       if (failed(call)) {
         return importOp.emitError() << "failed to create call struct";
@@ -2222,8 +2207,8 @@ private:
     return {result};
   }
 
-  FailureOr<Value> buildSizeExpression(ArrayRef<Type> types, OpBuilder &builder,
-                                       Location loc) const {
+  MaybeZeroValue buildSizeExpression(ArrayRef<Type> types, OpBuilder &builder,
+                                     Location loc) const {
     auto ctx = builder.getContext();
 
     Type hostSizeType = emitc::OpaqueType::get(ctx, "iree_host_size_t");
@@ -2234,7 +2219,7 @@ private:
                            /*resultType=*/hostSizeType,
                            /*value=*/emitc::OpaqueAttr::get(ctx, "0"))
                        .getResult();
-
+    bool isZero = true;
     for (Type type : types) {
       Type valueType = typeConverter.convertTypeAsNonPointer(type);
       Value size =
@@ -2246,14 +2231,15 @@ private:
                        /*type=*/hostSizeType,
                        /*operands=*/ArrayRef<Value>{result, size})
                    .getResult();
+      isZero = false;
     }
 
-    return {result};
+    return MaybeZeroValue{result, isZero};
   }
 
   FailureOr<TypedValue<emitc::LValueType>>
-  buildIreeVmFunctionCallStruct(Value import, Value argumentSize,
-                                Value resultSize, OpBuilder &builder,
+  buildIreeVmFunctionCallStruct(Value import, MaybeZeroValue argumentSize,
+                                MaybeZeroValue resultSize, OpBuilder &builder,
                                 Location loc) const {
     auto ctx = builder.getContext();
 
@@ -2276,9 +2262,10 @@ private:
     return {call};
   }
 
-  Value allocateByteSpan(TypedValue<emitc::LValueType> call, Value size,
-                         StringRef memberName, OpBuilder &builder,
-                         Location loc) const {
+  Value allocateByteSpan(TypedValue<emitc::LValueType> call,
+                         MaybeZeroValue size, StringRef memberName,
+                         OpBuilder &builder, Location loc) const {
+
     auto ctx = builder.getContext();
 
     // byteSpan = call.<memberName>;
@@ -2290,6 +2277,22 @@ private:
                             memberName, call)
                         .getResult();
 
+    // alloca_(0) returns NULL in some configurations on Windows. Make sure to
+    // allocate at least one byte to get a valid pointer.
+    Value allocaSize;
+    if (size.isZero) {
+      Type hostSizeType = emitc::OpaqueType::get(ctx, "iree_host_size_t");
+
+      allocaSize = builder
+                       .create<emitc::ConstantOp>(
+                           /*location=*/loc,
+                           /*resultType=*/hostSizeType,
+                           /*value=*/emitc::OpaqueAttr::get(ctx, "1"))
+                       .getResult();
+    } else {
+      allocaSize = size.value;
+    }
+
     // void *byteSpan_data_void = iree_alloca(size);
     auto byteSpanDataVoid =
         builder
@@ -2298,7 +2301,7 @@ private:
                 /*type=*/
                 emitc::PointerType::get(emitc::OpaqueType::get(ctx, "void")),
                 /*callee=*/"iree_alloca",
-                /*operands=*/ArrayRef<Value>{size})
+                /*operands=*/ArrayRef<Value>{allocaSize})
             .getResult(0);
 
     // uint8_t *byteSpan_data = (uint8_t*)byteSpan_data_void;
@@ -2314,7 +2317,7 @@ private:
     emitc_builders::structMemberAssign(builder, loc,
                                        /*memberName=*/"data_length",
                                        /*operand=*/byteSpan,
-                                       /*value=*/size);
+                                       /*value=*/size.value);
 
     // byteSpan.data = byteSpan_data
     emitc_builders::structMemberAssign(builder, loc,
@@ -2323,7 +2326,7 @@ private:
                                        /*value=*/byteSpanData);
 
     // memset(byteSpanData, 0, SIZE);
-    emitc_builders::memset(builder, loc, byteSpanData, 0, size);
+    emitc_builders::memset(builder, loc, byteSpanData, 0, allocaSize);
 
     return byteSpan;
   }
@@ -2789,14 +2792,8 @@ class CallOpConversion : public EmitCConversionPattern<OpTy> {
 
     Value operandRef = this->getModuleAnalysis().lookupRef(operand);
 
-    auto ref = emitc_builders::allocateVariable(
+    auto [ref, refPtr] = emitc_builders::allocZeroInitializedVar(
         builder, loc, emitc::OpaqueType::get(ctx, "iree_vm_ref_t"));
-
-    Value refPtr = emitc_builders::addressOf(builder, loc, ref);
-
-    if (failed(clearStruct(builder, refPtr))) {
-      return failure();
-    }
 
     builder.create<emitc::CallOpaqueOp>(
         /*location=*/loc,
@@ -4501,7 +4498,9 @@ void populateVMToEmitCPatterns(ConversionTarget &conversionTarget,
   ADD_GENERIC_PATTERN(IREE::VM::BitcastF32I32Op, "vm_bitcast_f32i32");
   ADD_GENERIC_PATTERN(IREE::VM::BitcastI32F32Op, "vm_bitcast_i32f32");
   ADD_GENERIC_PATTERN(IREE::VM::CastF32SI32Op, "vm_cast_f32si32");
+  ADD_GENERIC_PATTERN(IREE::VM::CastF32SI64Op, "vm_cast_f32si64");
   ADD_GENERIC_PATTERN(IREE::VM::CastF32UI32Op, "vm_cast_f32ui32");
+  ADD_GENERIC_PATTERN(IREE::VM::CastF32UI64Op, "vm_cast_f32ui64");
   ADD_GENERIC_PATTERN(IREE::VM::CastSI32F32Op, "vm_cast_si32f32");
   ADD_GENERIC_PATTERN(IREE::VM::CastUI32F32Op, "vm_cast_ui32f32");
   ADD_GENERIC_PATTERN(IREE::VM::CeilF32Op, "vm_ceil_f32");

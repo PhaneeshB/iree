@@ -70,16 +70,16 @@ iree_cc_library(
     "ROCDLKernelConfig.h"
     "ROCDLPasses.h"
   SRCS
-    "AMDGPUChainedMatmulPass.cpp"
     "ConvertToLLVM.cpp"
     "ConvertToNVVM.cpp"
     "ConvertToROCDL.cpp"
     "ExtractAddressComputationGPUPass.cpp"
     "KernelConfig.cpp"
+    "LLVMGPUAssignConstantOrdinals.cpp"
     "LLVMGPUCastAddressSpaceFunction.cpp"
     "LLVMGPUCastTypeToFitMMA.cpp"
     "LLVMGPUConfigureTensorLayouts.cpp"
-    "LLVMGPUConfigureVectorLayouts.cpp"
+    "LLVMGPULinkExecutables.cpp"
     "LLVMGPULowerExecutableTarget.cpp"
     "LLVMGPUPackSharedMemoryAlloc.cpp"
     "LLVMGPUPrefetching.cpp"
@@ -92,9 +92,11 @@ iree_cc_library(
     "LLVMGPUVectorLowering.cpp"
     "LLVMGPUVectorToGPU.cpp"
     "Passes.cpp"
+    "ROCDLAnnotateKernelForTranslation.cpp"
     "ROCDLKernelConfig.cpp"
     "ROCDLLowerExecutableTarget.cpp"
     "ROCDLSelectLoweringStrategy.cpp"
+    "TestLLVMGPUQueryMMAPass.cpp"
     "Verifiers.cpp"
   DEPS
     ::PassHeaders
@@ -132,6 +134,7 @@ iree_cc_library(
     MLIRGPUTransforms
     MLIRIR
     MLIRLLVMCommonConversion
+    MLIRLLVMDialect
     MLIRLinalgDialect
     MLIRLinalgTransforms
     MLIRMathDialect
@@ -181,7 +184,6 @@ iree_cc_library(
     iree::compiler::Codegen::Interfaces::UKernelOpInterface
     iree::compiler::Codegen::LLVMGPU::TransformExtensions::LLVMGPUExtensions
     iree::compiler::Codegen::LLVMGPU::Utils
-    iree::compiler::Codegen::TransformStrategies::GPU
     iree::compiler::Codegen::Transforms
     iree::compiler::Codegen::Utils
     iree::compiler::Codegen::Utils::VectorOpUtils

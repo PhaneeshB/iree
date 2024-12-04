@@ -20,6 +20,7 @@
 #include "iree/compiler/Codegen/SPIRV/Passes.h"
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "iree/compiler/Codegen/Utils/MarkerUtils.h"
+#include "iree/compiler/Dialect/Util/Transforms/Passes.h"
 #include "iree/compiler/Utils/PassUtils.h"
 #include "llvm/ADT/STLForwardCompat.h"
 #include "llvm/Support/Debug.h"
@@ -118,7 +119,7 @@ static void addTileAndDistributeToWorkgroupsPasses(
   }
   funcPassManager.addPass(createConvertToDestinationPassingStylePass(
       useWARForCooperativeMatrixCodegen));
-  funcPassManager.addPass(createCanonicalizerPass());
+  funcPassManager.addPass(createConfigTrackingCanonicalizerPass());
   funcPassManager.addPass(createCSEPass());
 }
 
@@ -304,7 +305,7 @@ void addSPIRVBaseVectorizePassPipeline(OpPassManager &funcPassManager) {
   funcPassManager.addPass(createFoldAffineMinInDistributedLoopsPass());
   funcPassManager.addPass(memref::createResolveShapedTypeResultDimsPass());
 
-  funcPassManager.addPass(createCanonicalizerPass());
+  funcPassManager.addPass(createConfigTrackingCanonicalizerPass());
   funcPassManager.addPass(createCSEPass());
 
   // Tile to GPU invocations and vectorize.
@@ -340,18 +341,18 @@ void addSPIRVWinogradVectorizePassPipeline(OpPassManager &funcPassManager) {
   funcPassManager.addPass(createFoldAffineMinInDistributedLoopsPass());
   funcPassManager.addPass(memref::createResolveShapedTypeResultDimsPass());
 
-  funcPassManager.addPass(createCanonicalizerPass());
+  funcPassManager.addPass(createConfigTrackingCanonicalizerPass());
   funcPassManager.addPass(createCSEPass());
 
   funcPassManager.addPass(createGPUTilePass());
   funcPassManager.addPass(
       IREE::LinalgExt::createDecomposeWinogradTransformPass());
-  funcPassManager.addPass(createCanonicalizerPass());
+  funcPassManager.addPass(createConfigTrackingCanonicalizerPass());
   funcPassManager.addPass(createCSEPass());
 
   // Tile to GPU invocations and vectorize.
   funcPassManager.addPass(createSPIRVAnnotateWinogradLoopsPass());
-  funcPassManager.addPass(createCanonicalizerPass());
+  funcPassManager.addPass(createConfigTrackingCanonicalizerPass());
   funcPassManager.addPass(createCSEPass());
   {
     GenericVectorizationPassOptions options;
@@ -391,7 +392,7 @@ void addSPIRVCooperativeMatrixVectorizePassPipeline(
   funcPassManager.addPass(createRemoveSingleIterationLoopPass());
   // Run canonicalization patterns to propagate constant shape sizes after
   // removing trip-one loops.
-  funcPassManager.addPass(createCanonicalizerPass());
+  funcPassManager.addPass(createConfigTrackingCanonicalizerPass());
   funcPassManager.addPass(createCSEPass());
 
   // Tile and distribute to GPU subgroups.
@@ -529,7 +530,7 @@ void addSPIRVMatmulPromoteVectorizePassPipeline(OpPassManager &funcPassManager,
   funcPassManager.addPass(createOptimizeVectorTransferPass());
 
   // Hoist loop invariant code to avoid pipelining it.
-  funcPassManager.addPass(createLoopInvariantCodeMotionPass());
+  funcPassManager.addPass(createIREELoopInvariantCodeMotionPass());
   PipeliningSchedulingStrategy schedule =
       storeStage == 0 ? PipeliningSchedulingStrategy::loadStoreStage0
                       : PipeliningSchedulingStrategy::loadGlobalStage0;
@@ -549,7 +550,7 @@ void addSPIRVSubgroupReducePassPipeline(OpPassManager &funcPassManager) {
   // Fuse input parallel ops into the reduction op so that we don't need to
   // create temporary allocations during bufferization.
   funcPassManager.addPass(createRematerializeParallelOpsPass());
-  funcPassManager.addPass(createCanonicalizerPass());
+  funcPassManager.addPass(createConfigTrackingCanonicalizerPass());
 
   funcPassManager.addPass(createGPUTileReductionPass());
   funcPassManager.addPass(createCanonicalizerPass());
@@ -571,7 +572,7 @@ void addSPIRVSubgroupReducePassPipeline(OpPassManager &funcPassManager) {
     funcPassManager.addPass(createCSEPass());
   }
 
-  funcPassManager.addPass(createLoopInvariantCodeMotionPass());
+  funcPassManager.addPass(createIREELoopInvariantCodeMotionPass());
   funcPassManager.addPass(createCanonicalizerPass());
   funcPassManager.addPass(createCSEPass());
 
@@ -586,7 +587,7 @@ void addSPIRVSubgroupReducePassPipeline(OpPassManager &funcPassManager) {
 
   // Simplify the IR for vector distribution.
   funcPassManager.addPass(memref::createFoldMemRefAliasOpsPass());
-  funcPassManager.addPass(createLoopInvariantCodeMotionPass());
+  funcPassManager.addPass(createIREELoopInvariantCodeMotionPass());
   funcPassManager.addPass(createCanonicalizerPass());
   funcPassManager.addPass(createCSEPass());
   funcPassManager.addPass(createForOpCanonicalizationPass());
@@ -630,10 +631,12 @@ void buildSPIRVCodegenPassPipeline(OpPassManager &variantPassManager) {
     modulePassManager.addPass(
         createSPIRVLowerExecutableUsingTransformDialectPass());
     FunctionLikeNest(modulePassManager)
-        .addPass(createSPIRVLowerExecutableTargetPass);
+        .addPass(createSPIRVLowerExecutableTargetPass)
+        .addPass(createVerifyWorkgroupDistributionPass);
     addMemRefLoweringPasses(modulePassManager);
   }
   variantPassManager.addPass(createReconcileTranslationInfoPass());
+  variantPassManager.addPass(IREE::Util::createDropCompilerHintsPass());
 
   {
     OpPassManager &modulePassManager = variantPassManager.nest<ModuleOp>();

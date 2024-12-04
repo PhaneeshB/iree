@@ -80,6 +80,7 @@ extra_css:
 exclude_docs: |
   *.gz
   assets/images/README.md
+  **/snippets/*.md
 
 copyright: Copyright &copy; 2024 The IREE Authors
 
@@ -196,6 +197,7 @@ nav:
           - "developers/general/developer-tips.md"
           - "developers/general/github-actions.md"
           - "developers/general/release-management.md"
+          - "developers/general/versioning-scheme.md"
           - "developers/general/testing-guide.md"
       - "Building":
           - "developers/building/bazel.md"

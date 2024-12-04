@@ -139,6 +139,17 @@ static llvm::cl::list<std::string> clPreprocessExecutablesWith{
         "will fail compilation."),
 };
 
+static llvm::cl::opt<bool> clLinkExecutables{
+    "iree-hal-link-executables",
+    llvm::cl::desc(
+        "Controls linking of executables. The default is to always link, "
+        "however disabling linking allows inspecting serialization "
+        "of each executable in isolation and will dump a single binary per "
+        "executable when used in conjunction with "
+        "`--iree-hal-dump-executable-binaries-to`."),
+    llvm::cl::init(true),
+};
+
 } // namespace
 
 using FunctionLikeNest =
@@ -149,18 +160,20 @@ using FunctionLikeNest =
 //===----------------------------------------------------------------------===//
 
 static void addCleanupPatterns(OpPassManager &passManager) {
-  // Standard MLIR cleanup.
-  passManager.addPass(mlir::createCSEPass());
-  passManager.addPass(mlir::createCanonicalizerPass());
-  passManager.addPass(mlir::createCSEPass());
 
-  // Simplify util.global accesses; this can help with data flow tracking as
-  // redundant store-loads are removed.
   FunctionLikeNest(passManager)
-      .addPass(IREE::Util::createSimplifyGlobalAccessesPass);
+      // Standard MLIR cleanup.
+      .addPass(mlir::createCanonicalizerPass)
+      .addPass(mlir::createCSEPass)
+
+      // Simplify util.global accesses; this can help with data flow tracking as
+      // redundant store-loads are removed.
+      .addPass(IREE::Util::createSimplifyGlobalAccessesPass)
+
+      // Aggressive cleanup.
+      .addPass(IREE::Util::createApplyPatternsPass);
 
   // Cleanup and canonicalization of util.global (and other util ops).
-  passManager.addPass(IREE::Util::createApplyPatternsPass());
   passManager.addPass(IREE::Util::createFoldGlobalsPass());
   passManager.addPass(IREE::Util::createFuseGlobalsPass());
 }
@@ -176,7 +189,8 @@ static void addExecutableSubstitutionPasses(OpPassManager &passManager,
   }
   if (!substitutions.empty()) {
     SubstituteExecutablesPassOptions substituteOptions;
-    substituteOptions.substitutions = substitutions;
+    substituteOptions.substitutions.assign(substitutions.begin(),
+                                           substitutions.end());
     passManager.addPass(
         IREE::HAL::createSubstituteExecutablesPass(substituteOptions));
   }
@@ -197,12 +211,19 @@ void buildHALDeviceAssignmentPassPipeline(
     // Today we just assign devices from parameters but we should instead be
     // performing analysis at the flow level and then doing magic device
     // database lookups here.
-    passManager.addPass(IREE::HAL::createAssignLegacyTargetDevicesPass(
-        {&targetRegistry, assignmentOptions.legacyTargetBackends}));
+    AssignLegacyTargetDevicesPassOptions options;
+    options.targetRegistry = &targetRegistry;
+    options.targetBackends.assign(
+        assignmentOptions.legacyTargetBackends.begin(),
+        assignmentOptions.legacyTargetBackends.end());
+    passManager.addPass(
+        IREE::HAL::createAssignLegacyTargetDevicesPass(options));
   }
   if (!assignmentOptions.targetDevices.empty()) {
-    passManager.addPass(IREE::HAL::createAssignTargetDevicesPass(
-        {assignmentOptions.targetDevices}));
+    AssignTargetDevicesPassOptions options;
+    options.targetDevices.assign(assignmentOptions.targetDevices.begin(),
+                                 assignmentOptions.targetDevices.end());
+    passManager.addPass(IREE::HAL::createAssignTargetDevicesPass(options));
   }
 
   // Create globals for each device (if needed).
@@ -400,7 +421,7 @@ void buildHALTransformPassPipeline(OpPassManager &passManager,
 
   if (compileFrom < PipelinePhase::ExecutableTargets) {
     passManager.addNestedPass<IREE::HAL::ExecutableOp>(
-        IREE::HAL::createTranslateExecutablesPass({targetRegistry}));
+        IREE::HAL::createTranslateAllExecutablesPass({targetRegistry}));
   }
 
   // If debug information is requested capture the translated MLIR source text
@@ -461,13 +482,22 @@ void buildHALTransformPassPipeline(OpPassManager &passManager,
   // TODO(benvanik): move translation down to here.
 
   // After all executables are translated and before resolving export
-  // ordinals, we allow the backends to link executables together. For
+  // ordinals we allow the backends to link executables together. For
   // example, the LLVM AOT backend may combine all executable targets for the
   // same architecture into a single executable and link it as a shared
   // library.
-  if (transformOptions.linkExecutables) {
-    passManager.addPass(IREE::HAL::createLinkExecutablesPass({targetRegistry}));
+  if (transformOptions.linkExecutables && clLinkExecutables) {
+    passManager.addPass(
+        IREE::HAL::createLinkAllExecutablesPass({targetRegistry}));
   }
+
+  // If any executable variants have external objects referenced within them
+  // we hoist them up to the top-level variant. This is done after linking so
+  // that we have the greatest chance of combining executables without different
+  // object attrs preventing the merging.
+  passManager.nest<IREE::HAL::ExecutableOp>()
+      .addNestedPass<IREE::HAL::ExecutableVariantOp>(
+          IREE::HAL::createHoistExecutableObjectsPass());
 
   // Resolve export ordinals from nested symbol references prior to
   // serialization. As this pass creates lookup ops it should run before
@@ -527,7 +557,7 @@ void buildHALTransformPassPipeline(OpPassManager &passManager,
   // contents not turned into a big base64 string.
   if (transformOptions.serializeExecutables) {
     passManager.addNestedPass<IREE::HAL::ExecutableOp>(
-        IREE::HAL::createSerializeExecutablesPass(
+        IREE::HAL::createSerializeAllExecutablesPass(
             {&targetRegistry, targetOptions.debugLevel,
              targetOptions.executableIntermediatesPath,
              targetOptions.executableBinariesPath}));

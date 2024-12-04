@@ -16,6 +16,7 @@ include "mlir/IR/OpAsmInterface.td"
 include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Interfaces/CallInterfaces.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/InferIntRangeInterface.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/ViewLikeInterface.td"
@@ -35,6 +36,7 @@ def OpGroupPartitionedRegionOps : OpDocGroup {
 let opDocGroup = OpGroupPartitionedRegionOps in {
 
 def FLOW_DispatchRegionOp : FLOW_PureOp<"dispatch.region", [
+    DeclareOpInterfaceMethods<ReifyRankedShapedTypeOpInterface>,
     Util_ShapeAwareOp,
     AttrSizedOperandSegments]> {
   let summary = [{a group of ops}];
@@ -1267,7 +1269,7 @@ def FLOW_TensorLoadOp : FLOW_PureOp<"tensor.load", [
     Variadic<FLOW_Dim>:$indices
   );
   let results = (outs
-    AnyTypeOf<[FLOW_PrimitiveType, AnyVector]>:$result
+    AnyTypeOf<[FLOW_PrimitiveType, AnyVectorOfNonZeroRank]>:$result
   );
 
   let assemblyFormat = [{
@@ -1313,7 +1315,7 @@ def FLOW_TensorStoreOp : FLOW_PureOp<"tensor.store", [
   }];
 
   let arguments = (ins
-    AnyTypeOf<[FLOW_PrimitiveType, AnyVector]>:$value,
+    AnyTypeOf<[FLOW_PrimitiveType, AnyVectorOfNonZeroRank]>:$value,
     FLOW_Tensor:$target,
     FLOW_ShapeDynamicDims:$target_dims,
     Variadic<FLOW_Dim>:$indices
@@ -1740,7 +1742,11 @@ def FLOW_DispatchWorkgroupCountFromSliceOp :
 }
 
 def FLOW_DispatchWorkloadOrdinalOp :
-    FLOW_PureOp<"dispatch.workload.ordinal"> {
+    FLOW_PureOp<"dispatch.workload.ordinal", [
+      DeclareOpInterfaceMethods<InferIntDivisibilityOpInterface>,
+      DeclareOpInterfaceMethods<InferIntRangeInterface,
+        ["inferResultRanges"]>
+    ]> {
   let arguments = (ins
     Index:$operand,
     IndexAttr:$ordinal

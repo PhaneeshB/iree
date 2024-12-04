@@ -20,12 +20,6 @@
 // Command Line Options
 //===----------------------------------------------------------------------===//
 
-static llvm::cl::opt<std::string> clDispatchTransformFileName(
-    "iree-dispatch-creation-dispatch-use-transform-dialect",
-    llvm::cl::desc("MLIR file containing a top-level module that specifies "
-                   "the transformations to apply to form dispatch regions."),
-    llvm::cl::init(""));
-
 static llvm::cl::opt<bool> clDetensoring(
     "iree-dispatch-creation-enable-detensoring",
     llvm::cl::desc(
@@ -49,10 +43,10 @@ static llvm::cl::opt<bool> clEnableFusePaddingIntoLinalgProducerOps(
 
 static llvm::cl::opt<int> clPadFactor(
     "iree-dispatch-creation-pad-factor",
-    llvm::cl::desc(
-        "Provides padding size hints that will be attached to "
-        "encodings. This only affects the experimental data tiling "
-        "path in Flow with iree-dispatch-creation-experimental-data-tiling."),
+    llvm::cl::desc("Provides padding size hints that will be attached to "
+                   "encodings. This only affects the experimental data tiling "
+                   "path in DispatchCreation with "
+                   "iree-dispatch-creation-experimental-data-tiling."),
     llvm::cl::init(32));
 
 static llvm::cl::opt<bool> clEnablePadHandling(
@@ -108,10 +102,12 @@ static void addCleanupPatterns(OpPassManager &passManager) {
 
       // Simplify util.global accesses; this can help with data flow tracking as
       // redundant store-loads are removed.
-      .addPass(IREE::Util::createSimplifyGlobalAccessesPass);
+      .addPass(IREE::Util::createSimplifyGlobalAccessesPass)
+
+      // Aggressive cleanup.
+      .addPass(IREE::Util::createApplyPatternsPass);
 
   // Cleanup and canonicalization of util.global (and other util ops).
-  passManager.addPass(IREE::Util::createApplyPatternsPass());
   passManager.addPass(IREE::Util::createFoldGlobalsPass());
   passManager.addPass(IREE::Util::createFuseGlobalsPass());
 
@@ -204,19 +200,7 @@ void addDispatchRegionCreationPreprocessingPasses(OpPassManager &passManager) {
 // `flow.dispatch.workgroup` ops.
 static void addDispatchRegionCreationPasses(OpPassManager &passManager) {
   FunctionLikeNest(passManager)
-      // Only want use the transform dialect for some dispatch regions and let
-      // the FormDispatchRegions handle the rest. This only moves the root
-      // compute op into the dispatch region, so that we can run additional
-      // transformations afterwards with a simple region and without bothering
-      // producers.
-      .addPredicatedPass(
-          !clDispatchTransformFileName.empty(),
-          [&]() {
-            DispatchWithTransformDialectPassOptions options;
-            options.transformSpecPath = clDispatchTransformFileName;
-            return createDispatchWithTransformDialectPass(options);
-          })
-      // Create dispatches for scalar operations as roots
+      // Create dispatches for scalar operations as roots.
       .addPass(DispatchCreation::createFormScalarDispatchesPass)
       // Create `flow.dispatch.region` centered around a root and fuse with
       // producers and consumers.
@@ -248,7 +232,11 @@ static void addDispatchRegionCreationPasses(OpPassManager &passManager) {
         // op, so hoist them out of their current dispatch regions. Also, bubble
         // SetEncodingOps through special operations like bit-extending ops and
         // broadcasting ops.
-        .addPass(DispatchCreation::createHoistEncodingOpsPass);
+        .addPass(DispatchCreation::createHoistEncodingOpsPass)
+        // After SetEncodingOps are hoisted, try to fuse them with their
+        // producer dispatches to try to hide packing costs.
+        .addPass(
+            DispatchCreation::createFuseEncodingOpsIntoDispatchRegionsPass);
   }
   FunctionLikeNest(passManager)
       // Collapse dimensions of linalg Ops.
@@ -306,6 +294,7 @@ void buildDispatchCreationPassPipeline(
       // acts as a contiguous view of the tensor
       // - Apply tensor -> flow patterns
       .addPass(DispatchCreation::createConvertTensorToFlowPass)
+      .addPass(createCSEPass)
       .addPass(IREE::Flow::createCanonicalizerPass)
       /// Creates the workgroup count region where the materialized computation
       /// is derived as a program slice of the body of the dispatch. This method
@@ -333,14 +322,14 @@ void registerDispatchCreationPasses() {
 }
 
 void registerDispatchCreationPipelines() {
-  PassPipelineRegistration<TransformOptions> flowDispatchRegionCreationPipeline(
+  PassPipelineRegistration<TransformOptions> dispatchCreationPipeline(
       "iree-dispatch-creation-pipeline",
       "Flag used to run passes that form dispatch regions",
       [](OpPassManager &passManager, const TransformOptions &transformOptions) {
         buildDispatchCreationPassPipeline(passManager, transformOptions);
       });
 
-  PassPipelineRegistration<> flowDispatchRegionFormationPreprocessingPipeline(
+  PassPipelineRegistration<> dispatchCreationPreprocessingPipeline(
       "iree-dispatch-creation-preprocessing-pipeline",
       "Flag used to run preprocessing passes that run passes before dispatch "
       "region formation. Used only for testing",

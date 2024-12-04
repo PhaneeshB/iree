@@ -19,6 +19,8 @@
 #include "mlir/Dialect/Tensor/Transforms/Transforms.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#define DEBUG_TYPE "tile-and-distribute-to-workgroups-using-forall-op"
+
 namespace mlir::iree_compiler {
 
 #define CEILDIV(a, b) ((a + b - 1) / b)
@@ -51,9 +53,15 @@ struct TilingInfo {
 static FailureOr<TilingInfo>
 getTiledAndDistributionInfo(RewriterBase &rewriter,
                             ArrayRef<Operation *> computeOps) {
+  // TODO: It is expected that at most one compute op has a workgroup tiling
+  // level. Currently, it selects the last compute op that has workgroup tiling
+  // level.
   Operation *tilableOp = nullptr;
   for (Operation *op : llvm::reverse(computeOps)) {
     if (getLoweringConfig(op)) {
+      if (!getLoweringConfig(op).hasWorkgroupTilingLevel()) {
+        continue;
+      }
       tilableOp = op;
       break;
     }
@@ -194,13 +202,16 @@ static LogicalResult dropUnitDistributedDims(RewriterBase &rewriter,
   llvm::SmallDenseSet<int> droppedLoops;
   for (auto [index, lb, ub, step] :
        llvm::enumerate(mixedLbs, mixedUbs, mixedSteps)) {
-    if (!isa<Attribute>(lb) || !isa<Attribute>(ub) || !isa<Attribute>(step)) {
+
+    std::optional<int64_t> lbVal = getConstantIntValue(lb);
+    std::optional<int64_t> ubVal = getConstantIntValue(ub);
+    std::optional<int64_t> stepVal = getConstantIntValue(step);
+
+    if (!(lbVal && ubVal && stepVal)) {
       continue;
     }
-    int64_t lbVal = getConstantIntValue(lb).value();
-    int64_t ubVal = getConstantIntValue(ub).value();
-    int64_t stepVal = getConstantIntValue(step).value();
-    if (CEILDIV(ubVal - lbVal, stepVal) == 1) {
+
+    if (CEILDIV(ubVal.value() - lbVal.value(), stepVal.value()) == 1) {
       droppedLoops.insert(index);
     }
   }
@@ -254,6 +265,140 @@ static LogicalResult dropUnitDistributedDims(RewriterBase &rewriter,
 // Pass implementation.
 //===---------------------------------------------------------------------===//
 
+// Fuse all consumers of the given `tiledOp` into the surrounding scf.forall.
+// Returns a list of new `tensor.extract_slice` ops with new fusion
+// opportunities, as well as the new surrounding `scf.forall` (because consumer
+// fusion replaces the loop).
+static std::pair<std::queue<Operation *>, scf::ForallOp>
+fuseConsumers(RewriterBase &rewriter, Operation *tiledOp) {
+  auto addCandidateSlices =
+      [](Operation *fusedOp,
+         std::queue<tensor::ParallelInsertSliceOp> &candidates) {
+        for (auto *userOp : fusedOp->getResults().getUsers()) {
+          if (auto sliceOp =
+                  llvm::dyn_cast<tensor::ParallelInsertSliceOp>(userOp)) {
+            candidates.push(sliceOp);
+          }
+        }
+      };
+
+  // Collect the candidate slices which can be potential consumers that can be
+  // fused.
+  std::queue<tensor::ParallelInsertSliceOp> candidates;
+  addCandidateSlices(tiledOp, candidates);
+
+  std::queue<Operation *> newFusionOpportunities;
+  scf::ForallOp newLoop = tiledOp->getParentOfType<scf::ForallOp>();
+  while (!candidates.empty()) {
+
+    // Traverse the slices in BFS fashion.
+    tensor::ParallelInsertSliceOp candidateSliceOp = candidates.front();
+    candidates.pop();
+
+    FailureOr<scf::SCFFuseConsumerOfSliceResult> fusedResult =
+        mlir::scf::tileAndFuseConsumerOfSlice(rewriter, candidateSliceOp);
+    if (failed(fusedResult)) {
+      LLVM_DEBUG(llvm::dbgs() << "failed to fuse consumer of slice: "
+                              << candidateSliceOp << "\n");
+      continue;
+    }
+
+    // Replace the original consumer operation with the tiled implementation.
+    rewriter.replaceOp(fusedResult->origConsumerOperand->getOwner(),
+                       fusedResult->tiledOps.front());
+
+    // The result of the fused consumers might themselved be slices of
+    // values produced by operations that implement the `TilingInterface`.
+    // Add these operations to the worklist.
+    addCandidateSlices(fusedResult->tiledAndFusedConsumerOperand->getOwner(),
+                       candidates);
+
+    // Add the list of new producer fusion opportunities.
+    for (auto tiledOp : fusedResult.value().tiledOps) {
+      for (auto operand : tiledOp->getOperands()) {
+        if (auto sliceProducer =
+                operand.getDefiningOp<tensor::ExtractSliceOp>()) {
+          if (llvm::isa_and_present<TilingInterface>(
+                  sliceProducer.getSource().getDefiningOp())) {
+            newFusionOpportunities.push(sliceProducer);
+          }
+        }
+      }
+      // Store the new loop for follow up producer fusion.
+      newLoop = tiledOp->getParentOfType<scf::ForallOp>();
+    }
+  }
+  return std::make_pair(newFusionOpportunities, newLoop);
+}
+
+static void fuseProducersOfSlices(RewriterBase &rewriter,
+                                  std::queue<Operation *> &worklist,
+                                  scf::SCFTileAndFuseOptions &options,
+                                  scf::ForallOp forallOp) {
+  SmallVector<LoopLikeOpInterface> loops = {
+      cast<LoopLikeOpInterface>(&*forallOp)};
+  while (!worklist.empty()) {
+    auto candidateSlice = cast<tensor::ExtractSliceOp>(worklist.front());
+    worklist.pop();
+
+    auto fusableProducer =
+        candidateSlice.getSource().getDefiningOp<TilingInterface>();
+    if (!fusableProducer)
+      continue;
+
+    std::optional<scf::SCFTileAndFuseOptions::ControlFnResult> controlFnResult =
+        options.fusionControlFn(candidateSlice,
+                                cast<OpResult>(candidateSlice.getSource()),
+                                /*destinationInitArg=*/false);
+    if (!controlFnResult)
+      continue;
+
+    // The operands of the fused producer might themselved be slices of
+    // values produced by operations that implement the `TilingInterface`.
+    // Add these operations to the worklist.
+    std::optional<scf::SCFFuseProducerOfSliceResult> fusedResult =
+        scf::tileAndFuseProducerOfSlice(rewriter, candidateSlice, loops);
+    if (!fusedResult)
+      continue;
+
+    for (auto newSlice : fusedResult->generatedSlices) {
+      worklist.push(newSlice);
+    }
+  }
+}
+
+/// Starting from `op` walk all operands backwards to find all
+/// potentially fusable operations, i.e. operations that implement
+/// the `TilingInterface`.
+static void collectTiledAndFusedOps(Operation *rootOp,
+                                    llvm::SmallDenseSet<Operation *> &result) {
+  SmallVector<Operation *> worklist;
+  worklist.push_back(rootOp);
+  result.insert(rootOp);
+  while (!worklist.empty()) {
+    Operation *current = worklist.pop_back_val();
+    // Collect all tilable producers.
+    for (OpOperand &operand : current->getOpOperands()) {
+      Operation *producer = operand.get().getDefiningOp();
+      if (!producer || !isa<TilingInterface>(producer) ||
+          result.count(producer))
+        continue;
+      worklist.push_back(producer);
+      result.insert(producer);
+    }
+    // Collect all tilable consumers.
+    for (auto user : current->getUsers()) {
+      if (result.count(user)) {
+        continue;
+      }
+      if (isa<TilingInterface>(user)) {
+        worklist.push_back(user);
+        result.insert(user);
+      }
+    }
+  }
+}
+
 void TileAndDistributeToWorkgroupsUsingForallOpPass::runOnOperation() {
   auto funcOp = getOperation();
   auto *context = &getContext();
@@ -270,6 +415,27 @@ void TileAndDistributeToWorkgroupsUsingForallOpPass::runOnOperation() {
     // Did not find a tileable op. So do nothing.
     return;
   }
+  mlir::DominanceInfo dominanceInfo(tilableOp);
+  llvm::SmallDenseSet<Operation *> tiledAndFusedOps;
+  collectTiledAndFusedOps(tilableOp, tiledAndFusedOps);
+
+  llvm::DenseSet<Operation *> yieldReplacementsFor;
+  for (auto op : tiledAndFusedOps) {
+    // Yield a replacement if:
+    //  a) All users of fused op are dominated by the tiling root.
+    //  b) There is at most a single tiled user. If there is more than one
+    //     then yielding a replacement may result in multiple incompatible
+    //     consumer fusions.
+    if (llvm::any_of(op->getUsers(),
+                     [&](Operation *user) {
+                       return dominanceInfo.properlyDominates(tilableOp, user);
+                     }) &&
+        (llvm::count_if(op->getUsers(), [&](Operation *user) {
+           return tiledAndFusedOps.contains(user);
+         }) < 2)) {
+      yieldReplacementsFor.insert(op);
+    }
+  }
 
   scf::SCFTilingOptions tilingOptions;
   tilingOptions.setTileSizes(tilingInfo->tileSizes);
@@ -285,13 +451,25 @@ void TileAndDistributeToWorkgroupsUsingForallOpPass::runOnOperation() {
 
   scf::SCFTileAndFuseOptions tileAndFuseOptions;
   tileAndFuseOptions.setTilingOptions(tilingOptions);
-  // TODO: For now use the default tile and fuse control function. That needs
-  // to be modified to allow for returning the values of the producer when
-  // needed.
+
+  // The control function that determines whether a tiled producer should yield
+  // its replacement.
+  scf::SCFTileAndFuseOptions::ControlFnTy controlFn =
+      [&](tensor::ExtractSliceOp candidateSliceOp, OpResult originalProducer,
+          bool isDestinationOperand)
+      -> std::optional<scf::SCFTileAndFuseOptions::ControlFnResult> {
+    Operation *owner = originalProducer.getOwner();
+    bool yieldProducerReplacement = yieldReplacementsFor.contains(owner);
+    return scf::SCFTileAndFuseOptions::ControlFnResult{
+        yieldProducerReplacement};
+    return std::nullopt;
+  };
+  tileAndFuseOptions.setFusionControlFn(controlFn);
   rewriter.setInsertionPoint(tilableOp);
 
   // If the `tilableOp` is a `memref` op, then just tile the operation.
   SmallVector<LoopLikeOpInterface> tilingLoops;
+  Operation *rootTiledOp = nullptr;
   if (tilableOp->getNumResults() == 0) {
     FailureOr<scf::SCFTilingResult> tilingResult =
         scf::tileUsingSCF(rewriter, tilableOp, tilingOptions);
@@ -313,6 +491,7 @@ void TileAndDistributeToWorkgroupsUsingForallOpPass::runOnOperation() {
       rewriter.replaceAllUsesWith(origValue, replacement);
     }
     std::swap(tileAndFuseResult->loops, tilingLoops);
+    rootTiledOp = tileAndFuseResult->tiledAndFusedOps.front();
   }
   if (!tilingLoops.empty()) {
     if (tilingLoops.size() != 1 || !isa<scf::ForallOp>(tilingLoops[0])) {
@@ -325,6 +504,18 @@ void TileAndDistributeToWorkgroupsUsingForallOpPass::runOnOperation() {
     if (failed(dropUnitDistributedDims(rewriter, forallOp))) {
       forallOp.emitOpError("failed to drop unit dimensions");
       return signalPassFailure();
+    }
+
+    if (rootTiledOp) {
+      auto [newFusionOpportunities, newLoop] =
+          fuseConsumers(rewriter, rootTiledOp);
+
+      // Because we restrict to at most a single tilable consumer for yielding
+      // a replacement, no new fusion opportunities will yield a replacement,
+      // meaning there is no need to run consumer fusion again afterwards.
+      // TODO: run producer and consumer fusion in one worklist.
+      fuseProducersOfSlices(rewriter, newFusionOpportunities,
+                            tileAndFuseOptions, newLoop);
     }
   }
 

@@ -122,6 +122,7 @@ option(BUILD_SHARED_LIBS "Instructs CMake to build libraries as shared if possib
 set(IREE_RUNTIME_OPTIMIZATION_PROFILE "" CACHE STRING
     "Build optimization profile to apply. One of '', 'lto', 'size'.")
 set(IREE_LTO_MODE "full" CACHE STRING "LTO type, 'thin' or 'full'. Only consulted on clang-like compilers.")
+option(IREE_VISIBILITY_HIDDEN "Builds all C/C++ libraries with hidden visibility" ON)
 
 #-------------------------------------------------------------------------------
 # IREE command-line tooling configuration
@@ -257,13 +258,6 @@ set(IREE_HAL_DRIVER_CUDA_DEFAULT OFF)
 # required to actually run HIP workloads.
 set(IREE_HAL_DRIVER_HIP_DEFAULT OFF)
 
-# Vulkan support is enabled by default if the platform might support Vulkan.
-# Apple platforms support Metal instead of Vulkan, though MoltenVK may work.
-set(IREE_HAL_DRIVER_VULKAN_DEFAULT ${IREE_HAL_DRIVER_DEFAULTS})
-if(APPLE)
-  set(IREE_HAL_DRIVER_VULKAN_DEFAULT OFF)
-endif()
-
 # Metal support is enabled if it's one of the Apple platforms.
 set(IREE_HAL_DRIVER_METAL_DEFAULT ${IREE_HAL_DRIVER_DEFAULTS})
 # Right now only support Apple silicon devices.
@@ -271,12 +265,29 @@ if(NOT APPLE OR NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm64")
   set(IREE_HAL_DRIVER_METAL_DEFAULT OFF)
 endif()
 
+# Null skeleton driver is only enabled in debug builds or dev mode.
+# We don't want to ship release builds with it or count it when calculating
+# binary sizes of minified builds.
+set(IREE_HAL_DRIVER_NULL_DEFAULT OFF)
+string(TOUPPER "${CMAKE_BUILD_TYPE}" _UPPERCASE_CMAKE_BUILD_TYPE)
+if (IREE_DEV_MODE OR (_UPPERCASE_CMAKE_BUILD_TYPE STREQUAL "DEBUG"))
+  set(IREE_HAL_DRIVER_NULL_DEFAULT ON)
+endif()
+
+# Vulkan support is enabled by default if the platform might support Vulkan.
+# Apple platforms support Metal instead of Vulkan, though MoltenVK may work.
+set(IREE_HAL_DRIVER_VULKAN_DEFAULT ${IREE_HAL_DRIVER_DEFAULTS})
+if(APPLE)
+  set(IREE_HAL_DRIVER_VULKAN_DEFAULT OFF)
+endif()
+
 option(IREE_HAL_DRIVER_CUDA "Enables the 'cuda' runtime HAL driver" ${IREE_HAL_DRIVER_CUDA_DEFAULT})
 option(IREE_HAL_DRIVER_HIP "Enables the 'hip' runtime HAL driver" ${IREE_HAL_DRIVER_HIP_DEFAULT})
 option(IREE_HAL_DRIVER_LOCAL_SYNC "Enables the 'local-sync' runtime HAL driver" ${IREE_HAL_DRIVER_DEFAULTS})
 option(IREE_HAL_DRIVER_LOCAL_TASK "Enables the 'local-task' runtime HAL driver" ${IREE_HAL_DRIVER_DEFAULTS})
-option(IREE_HAL_DRIVER_VULKAN "Enables the 'vulkan' runtime HAL driver" ${IREE_HAL_DRIVER_VULKAN_DEFAULT})
 option(IREE_HAL_DRIVER_METAL "Enables the 'metal' runtime HAL driver" ${IREE_HAL_DRIVER_METAL_DEFAULT})
+option(IREE_HAL_DRIVER_NULL "Enables the 'null' runtime HAL driver" ${IREE_HAL_DRIVER_NULL_DEFAULT})
+option(IREE_HAL_DRIVER_VULKAN "Enables the 'vulkan' runtime HAL driver" ${IREE_HAL_DRIVER_VULKAN_DEFAULT})
 
 option(IREE_HAL_EXECUTABLE_LOADER_DEFAULTS "Sets the default value for all runtime HAL executable loaders" ON)
 set(IREE_HAL_EXECUTABLE_LOADER_EMBEDDED_ELF_DEFAULT ${IREE_HAL_EXECUTABLE_LOADER_DEFAULTS})
@@ -332,11 +343,14 @@ endif()
 if(IREE_HAL_DRIVER_LOCAL_TASK)
   message(STATUS "  - local-task")
 endif()
-if(IREE_HAL_DRIVER_VULKAN)
-  message(STATUS "  - vulkan")
-endif()
 if(IREE_HAL_DRIVER_METAL)
   message(STATUS "  - metal")
+endif()
+if(IREE_HAL_DRIVER_NULL)
+  message(STATUS "  - null")
+endif()
+if(IREE_HAL_DRIVER_VULKAN)
+  message(STATUS "  - vulkan")
 endif()
 if(IREE_EXTERNAL_HAL_DRIVERS)
   message(STATUS "  + external: ${IREE_EXTERNAL_HAL_DRIVERS}")
@@ -501,22 +515,22 @@ option(IREE_ENABLE_ASSERTIONS "Force unset of NDEBUG compile option" OFF)
 function(iree_fix_ndebug)
   string(TOUPPER "${CMAKE_BUILD_TYPE}" _UPPERCASE_CMAKE_BUILD_TYPE)
   if(IREE_ENABLE_ASSERTIONS AND NOT "${_UPPERCASE_CMAKE_BUILD_TYPE}" STREQUAL "DEBUG")
-      # Also remove /D NDEBUG to avoid MSVC warnings about conflicting defines.
-      foreach(_FLAGS_VAR_TO_SCRUB
-              CMAKE_CXX_FLAGS_${_UPPERCASE_CMAKE_BUILD_TYPE}
-              CMAKE_C_FLAGS_${_UPPERCASE_CMAKE_BUILD_TYPE})
-          set(_ORIGINAL_FLAGS "${${_FLAGS_VAR_TO_SCRUB}}")
-          string(REGEX REPLACE "(^| )[/-]D *NDEBUG($| )" " " _ALTERED_FLAGS "${_ORIGINAL_FLAGS}")
-          if(NOT "${_ORIGINAL_FLAGS}" STREQUAL "${_ALTERED_FLAGS}")
-            message(STATUS
-              "IREE_ENABLE_ASSERTIONS force disabled NDEBUG for ${_FLAGS_VAR_TO_SCRUB}: '${_ORIGINAL_FLAGS}' -> '${_ALTERED_FLAGS}'")
-            set(${_FLAGS_VAR_TO_SCRUB} "${_ALTERED_FLAGS}" PARENT_SCOPE)
-          endif()
-      endforeach()
+    # Also remove /D NDEBUG to avoid MSVC warnings about conflicting defines.
+    foreach(_FLAGS_VAR_TO_SCRUB
+            CMAKE_CXX_FLAGS_${_UPPERCASE_CMAKE_BUILD_TYPE}
+            CMAKE_C_FLAGS_${_UPPERCASE_CMAKE_BUILD_TYPE})
+      set(_ORIGINAL_FLAGS "${${_FLAGS_VAR_TO_SCRUB}}")
+      string(REGEX REPLACE "(^| )[/-]D *NDEBUG($| )" " " _ALTERED_FLAGS "${_ORIGINAL_FLAGS}")
+      if(NOT "${_ORIGINAL_FLAGS}" STREQUAL "${_ALTERED_FLAGS}")
+        message(STATUS
+          "IREE_ENABLE_ASSERTIONS force disabled NDEBUG for ${_FLAGS_VAR_TO_SCRUB}: '${_ORIGINAL_FLAGS}' -> '${_ALTERED_FLAGS}'")
+        set(${_FLAGS_VAR_TO_SCRUB} "${_ALTERED_FLAGS}" PARENT_SCOPE)
+      endif()
+    endforeach()
 
-      # Make sure that LLVM doesn't add its own logic for assertion disabling.
-      # We'd like to make sure that we are not dueling over globals.
-      set(LLVM_ENABLE_ASSERTIONS OFF PARENT_SCOPE)
+    # Make sure that LLVM doesn't add its own logic for assertion disabling.
+    # We'd like to make sure that we are not dueling over globals.
+    set(LLVM_ENABLE_ASSERTIONS OFF PARENT_SCOPE)
   endif()
 endfunction()
 iree_fix_ndebug()
@@ -632,7 +646,7 @@ if(IREE_BUILD_PYTHON_BINDINGS)
   # Some parts of the build use FindPython instead of FindPython3. Why? No
   # one knows, but they are different. So make sure to bootstrap this one too.
   # Not doing this here risks them diverging, which on multi-Python systems,
-  # can be troublesome. Note that nanobind requires FindPython.
+  # can be troublesome. Note that pybind11 and nanobind require FindPython.
   set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
   find_package(Python 3.9 COMPONENTS Interpreter Development.Module NumPy REQUIRED)
 elseif(IREE_BUILD_COMPILER OR IREE_BUILD_TESTS)
@@ -758,6 +772,30 @@ endif()
 #-------------------------------------------------------------------------------
 # MLIR/LLVM Dependency
 #-------------------------------------------------------------------------------
+
+# Both the IREE and MLIR Python bindings require pybind11. We initialize it here
+# at the top level so that everything uses ours consistently.
+if(IREE_BUILD_PYTHON_BINDINGS AND IREE_BUILD_COMPILER)
+  set(pybind11_VERSION 2.13.6)
+  include(FetchContent)
+  FetchContent_Declare(
+      pybind11
+      GIT_REPOSITORY https://github.com/pybind/pybind11
+      GIT_TAG        v${pybind11_VERSION}
+  )
+  set(PYBIND11_FINDPYTHON ON)
+  FetchContent_MakeAvailable(pybind11)
+  # pybind11 source fetches do not include find_package integration, which is
+  # a shame since sub-projects can require that to work. If we were using
+  # CMake 3.24, we could just add OVERRIDE_FIND_PACKAGE to the
+  # FetchContent_Declare call above and it would take care of doing the
+  # following to let subsequent sub-project find_package calls to resolve
+  # successfully.
+  set(pybind11_DIR "${pybind11_BINARY_DIR}")
+  file(WRITE "${pybind11_BINARY_DIR}/pybind11Config.cmake" "")
+  file(WRITE "${pybind11_BINARY_DIR}/pybind11ConfigVersion.cmake"
+       "set(PACKAGE_VERSION ${pybind11_VERSION})\nset(PACKAGE_VERSION_COMPATIBLE TRUE)")
+endif()
 
 if(NOT IREE_BUILD_COMPILER)
   message(STATUS "Not adding LLVM/MLIR because the configuration does not require it")
@@ -906,18 +944,6 @@ endif()
 
 if(IREE_BUILD_TESTS)
   include(iree_configure_testing)
-endif()
-
-if(IREE_BUILD_PYTHON_BINDINGS)
-  # The compiler uses pybind11
-  if(IREE_BUILD_COMPILER)
-    if(NOT TARGET pybind11::module)
-      message(STATUS "Using bundled pybind11")
-      add_subdirectory(third_party/pybind11 EXCLUDE_FROM_ALL)
-    else()
-      message(STATUS "Not including bundled pybind11 (already configured)")
-    endif()
-  endif()
 endif()
 
 if(IREE_TARGET_BACKEND_METAL_SPIRV)

@@ -55,11 +55,6 @@ LogicalResult tileReductionToSerialLoops(mlir::FunctionOpInterface funcOp,
                                          bool fuseInputProducer = false,
                                          bool coalesceLoops = false);
 
-/// Swizzles the workgroup order in `funcOp` according to the `swizzleLogTile`
-/// size. `swizzleLogTile` of 0 disables any swizzling.
-LogicalResult swizzleWorkgroupsInFunc(mlir::FunctionOpInterface funcOp,
-                                      unsigned swizzleLogTile);
-
 /// Adds padding to `memref.alloc` ops to reduce shared memory bank conflicts.
 /// The `paddingSizeBits` argument should be picked based on the target
 /// architecture, striking balance between minimizing bank conflicts and keeping
@@ -101,13 +96,12 @@ createGPUTensorAlloc(GPUPromoteSharedMemPattern promoteSharedMemPattern =
 std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createConvertVectorReductionToGPUPass(bool expandSubgroupReduction = true);
 
-enum class ReorderWorkgroupsStrategy { None, Swizzle, Transpose };
+using IREE::GPU::ReorderWorkgroupsStrategy;
 
 /// Reorders workgroup IDs.
 std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createReorderWorkgroups(
     ReorderWorkgroupsStrategy strategy = ReorderWorkgroupsStrategy::None,
-    unsigned swizzleLogTile = 0,
     std::function<LogicalResult(mlir::FunctionOpInterface)> filterFn = nullptr);
 
 #define GEN_PASS_DECL

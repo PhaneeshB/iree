@@ -12,7 +12,10 @@
 #ifndef IREE_COMPILER_CODEGEN_LLVMCPU_PASSES_H_
 #define IREE_COMPILER_CODEGEN_LLVMCPU_PASSES_H_
 
+#include <optional>
+
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenAttrs.h"
+#include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "mlir/Pass/Pass.h"
 
 namespace mlir::iree_compiler {
@@ -94,10 +97,11 @@ void addCPULinalgExtTileAndVectorizePipeline(
     OpPassManager &funcPassManager, TilingConfig &tilingConfig,
     LLVMCPUPipelineOptions &pipelineOpt);
 
-/// Populates the passes to lower to scalars operations for linalg based
-/// code-generation. This pipeline does not vectorize, but instead just
-/// converts to memrefs
-void addCPUDefaultPassPipeline(OpPassManager &funcPassManager);
+/// Populates the passes to lower scalars and unknown tensor op (i.e. linalg op
+/// that is not specialized by any pipeline). Adds an additional level of tiling
+/// and converts to memrefs.
+void addCPUDefaultPassPipeline(OpPassManager &funcPassManager,
+                               FailureOr<TilingConfig> &tilingConfig);
 
 void addConvTileAndDecomposeExpertPassPipeline(
     OpPassManager &funcPassManager, TilingConfig &tilingConfig,
@@ -156,7 +160,9 @@ void buildLLVMCPUCodegenPassPipeline(OpPassManager &variantPassManager,
 //----------------------------------------------------------------------------//
 
 /// Populates passes needed to link HAL executables across LLVMCPU targets.
-void buildLLVMCPULinkingPassPipeline(OpPassManager &modulePassManager);
+void buildLLVMCPULinkingPassPipeline(
+    OpPassManager &modulePassManager,
+    std::optional<std::string> target = std::nullopt);
 
 //----------------------------------------------------------------------------//
 // Register LLVMCPU Passes

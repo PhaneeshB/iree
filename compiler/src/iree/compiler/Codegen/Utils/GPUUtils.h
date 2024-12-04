@@ -8,7 +8,9 @@
 #define IREE_COMPILER_CODEGEN_UTILS_GPUUTILS_H_
 
 #include "iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUAttrs.h"
+#include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/HAL/IR/HALTypes.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
@@ -38,6 +40,13 @@ getGPUThreadIdsAndCounts(OpBuilder &builder, Location loc, unsigned numDims,
 llvm::SmallVector<linalg::ProcInfo, 2>
 getSubgroupIdsAndCounts(OpBuilder &builder, Location loc, unsigned warpSize,
                         unsigned numDims, llvm::ArrayRef<int64_t> numSubgroups);
+
+/// Indicates whether the given array of DeviceMappingAttrInterfaces is a
+/// descending relative mapping, for example:
+///  [#gpu.thread<z>, #gpu.thread<y>, #gpu.thread<x>]
+/// or
+///  [#gpu.thread<linear_dim_1>, #gpu.thread<linear_dim_0>]
+bool isDescendingRelativeMappingIndices(ArrayRef<Attribute> array);
 
 // Indicates whether the given `scf.forall` op has a processor ID mapping of
 // the template type(s).
@@ -97,6 +106,9 @@ FailureOr<SmallVector<int64_t>> getGPUTileSize(mlir::FunctionOpInterface funcOp,
 FailureOr<scf::SCFTileSizeComputationFunction>
 getGPUScfTileSizeComputeFn(mlir::FunctionOpInterface funcOp, int tilingLevel);
 
+/// Returns true iff the rank of the input value 'val' is non-zero.
+bool isNonZeroRank(TypedValue<VectorType> val);
+
 //===----------------------------------------------------------------------===//
 // GPU workgroup memory
 //===----------------------------------------------------------------------===//
@@ -149,6 +161,11 @@ Value unpackToVector(Location loc, OpBuilder &builder, Value packedInput,
 /// Emit identity constant based on combiningKind and type.
 Value getCombiningIdentityValue(Location loc, OpBuilder &builder,
                                 vector::CombiningKind kind, Type identityType);
+
+/// Returns the matching GPU reduction operation.
+mlir::gpu::AllReduceOperation
+combiningKindToAllReduce(vector::CombiningKind kind);
+
 //===----------------------------------------------------------------------===//
 // GPU CodeGen op filter
 //===----------------------------------------------------------------------===//
@@ -158,21 +175,15 @@ Value getCombiningIdentityValue(Location loc, OpBuilder &builder,
 bool sharedMemTransposeFilter(AffineMap indexMap);
 
 //===----------------------------------------------------------------------===//
-// GPU UKernel Utils
-//===----------------------------------------------------------------------===//
-
-/// Checks if target Chip(StringRef) has UKernel support.
-bool hasUkernelSupportedRocmArch(StringRef targetChip);
-
-/// Checks if targetAttr's GPU target has UKernel support.
-bool hasUkernelSupportedGpuArch(IREE::HAL::ExecutableTargetAttr targetAttr);
-
-//===----------------------------------------------------------------------===//
 // GPU Target Information
 //===----------------------------------------------------------------------===//
 FailureOr<ArrayAttr> getSupportedMmaTypes(DictionaryAttr config);
 
 FailureOr<ArrayAttr> getSupportedMmaTypes(mlir::FunctionOpInterface entryPoint);
+
+/// Returns the GPU target attribute from `iree-gpu-test-target` if provided.
+/// Returns null TargetAttr othersise.
+IREE::GPU::TargetAttr getCLGPUTarget(MLIRContext *context);
 
 /// Returns the GPU target attribute from executable |target| if found.
 /// Returns null TargetAttr othersise.
@@ -185,6 +196,17 @@ IREE::GPU::TargetAttr getGPUTargetAttr(Operation *op);
 /// exists; otherwise returns the subgroup size from the GPU target description.
 /// Returns std::nullopt if none found.
 std::optional<int> getGPUSubgroupSize(mlir::FunctionOpInterface func);
+
+/// Returns all `IREE::HAL::ExecutableVariantOp` operations from the
+/// given `mlir::ModuleOp`, ensuring they are returned in their original IR
+/// order.
+SmallVector<IREE::HAL::ExecutableVariantOp>
+getExecutableVariantOps(mlir::ModuleOp moduleOp);
+
+// Returns the MMA intrinsics associated with the given
+// `IREE::HAL::ExecutableVariantOp`.
+SmallVector<IREE::GPU::MMAIntrinsic>
+queryMMAIntrinsics(IREE::HAL::ExecutableVariantOp executableOp);
 
 } // namespace mlir::iree_compiler
 

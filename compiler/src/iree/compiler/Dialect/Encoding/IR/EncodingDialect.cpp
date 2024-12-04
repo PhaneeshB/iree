@@ -7,6 +7,7 @@
 #include "iree/compiler/Dialect/Encoding/IR/EncodingDialect.h"
 
 #include "iree/compiler/Dialect/Encoding/IR/EncodingOps.h"
+#include "iree/compiler/Dialect/Encoding/IR/EncodingTypes.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/SourceMgr.h"
@@ -16,16 +17,34 @@
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/Transforms/InliningUtils.h"
 
-using namespace mlir;
-using namespace mlir::iree_compiler::IREE::Encoding;
-
-#include "iree/compiler/Dialect/Encoding/IR/EncodingEnums.cpp.inc" // IWYU pragma: keep
-
 #define GET_ATTRDEF_CLASSES
-#include "iree/compiler/Dialect/Encoding/IR/EncodingAttrs.cpp.inc" // IWYU pragma: keep
+#include "iree/compiler/Dialect/Encoding/IR/EncodingAttrs.cpp.inc"
+#include "iree/compiler/Dialect/Encoding/IR/EncodingEnums.cpp.inc"
+#include "iree/compiler/Dialect/Encoding/IR/EncodingInterfaces.cpp.inc"
+#undef GET_ATTRDEF_CLASSES
+
+namespace mlir::iree_compiler::IREE::Encoding {
+namespace {
+
+// Used for custom printing support.
+struct EncodingOpAsmInterface : public OpAsmDialectInterface {
+  using OpAsmDialectInterface::OpAsmDialectInterface;
+  /// Hooks for getting an alias identifier alias for a given symbol, that is
+  /// not necessarily a part of this dialect. The identifier is used in place
+  /// of the symbol when printing textual IR. These aliases must not contain
+  /// `.` or end with a numeric digit([0-9]+). Returns success if an alias was
+  /// provided, failure otherwise.
+  AliasResult getAlias(Attribute attr, raw_ostream &os) const override {
+    if (llvm::isa<EncodingAttr>(attr)) {
+      os << "encoding";
+      return AliasResult::OverridableAlias;
+    }
+    return AliasResult::NoAlias;
+  }
+};
 
 // Used to control inlining behavior.
-struct IREEEncodingInlinerInterface : public DialectInlinerInterface {
+struct EncodingInlinerInterface : public DialectInlinerInterface {
   using DialectInlinerInterface::DialectInlinerInterface;
 
   bool isLegalToInline(Operation *call, Operation *callable,
@@ -45,9 +64,10 @@ struct IREEEncodingInlinerInterface : public DialectInlinerInterface {
     return true;
   }
 };
+} // namespace
 
 void IREEEncodingDialect::initialize() {
-  addInterfaces<IREEEncodingInlinerInterface>();
+  addInterfaces<EncodingOpAsmInterface, EncodingInlinerInterface>();
 
   addAttributes<
 #define GET_ATTRDEF_LIST
@@ -59,5 +79,7 @@ void IREEEncodingDialect::initialize() {
 #include "iree/compiler/Dialect/Encoding/IR/EncodingOps.cpp.inc"
       >();
 }
+
+} // namespace mlir::iree_compiler::IREE::Encoding
 
 #include "iree/compiler/Dialect/Encoding/IR/EncodingDialect.cpp.inc"

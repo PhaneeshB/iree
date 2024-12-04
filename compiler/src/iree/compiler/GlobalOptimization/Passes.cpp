@@ -29,12 +29,11 @@ static llvm::cl::opt<bool> clEnableFuseSiluHorizontalMatmul(
     llvm::cl::desc(
         "Enables fusing specifically structured matmuls (experimental)."),
     llvm::cl::init(false));
-// TODO(#15973): Make default to true after fixing the CPU DT regression.
 static llvm::cl::opt<bool> clEnableTransposePropagation(
     "iree-global-opt-propagate-transposes",
     llvm::cl::desc(
         "Enables propagation of transpose ops to improve fusion chances."),
-    llvm::cl::init(false));
+    llvm::cl::init(true));
 
 // TODO(hanchung): Remove the flag. We don't want to do early materialization by
 // default. Because it won't work for heterogeneous computing. This is not the
@@ -81,9 +80,12 @@ void buildGlobalOptimizationPassPipeline(
   // parameters are available for folding.
   if (!transformOptions.options.parameterImportPaths.empty()) {
     IREE::IO::Parameters::ImportParametersPassOptions importParametersOptions;
-    importParametersOptions.scopePaths =
-        transformOptions.options.parameterImportPaths;
-    importParametersOptions.keys = transformOptions.options.parameterImportKeys;
+    importParametersOptions.scopePaths.assign(
+        transformOptions.options.parameterImportPaths.begin(),
+        transformOptions.options.parameterImportPaths.end());
+    importParametersOptions.keys.assign(
+        transformOptions.options.parameterImportKeys.begin(),
+        transformOptions.options.parameterImportKeys.end());
     importParametersOptions.maximumSize =
         transformOptions.options.parameterImportMaximumSize;
     mainPassManager.addPass(IREE::IO::Parameters::createImportParametersPass(
@@ -92,13 +94,15 @@ void buildGlobalOptimizationPassPipeline(
 
   // Preprocessing passes to get the program into a canonical state.
   FunctionLikeNest(mainPassManager)
+      .addPredicatedPass(transformOptions.options.stripAssertions,
+                         IREE::Util::createStripDebugOpsPass)
+      .addPass(IREE::Util::createOptimizeIntArithmeticPass)
       .addPass(createLinalgQuantizedConvToConvPass)
       .addPass(createLinalgQuantizedMatmulToMatmulPass)
       .addPass(IREE::Flow::createCanonicalizerPass)
       .addPass(createRemoveZeroExtentTensorsPass)
       .addPass(createDetachElementwiseFromNamedOpsPass)
-      .addPass(mlir::createLinalgNamedOpConversionPass)
-      .addPass(createConvert1X1FilterConv2DToMatmulPass);
+      .addPass(mlir::createLinalgNamedOpConversionPass);
   mainPassManager.addPass(createEraseUnusedLinalgOperandsPass());
 
   // Expand tensor shapes into SSA values and optimize the whole program.
@@ -179,20 +183,24 @@ void buildGlobalOptimizationPassPipeline(
   FunctionLikeNest(mainPassManager)
       .addPass(createGlobalLoopInvariantCodeMotionPass)
       .addPass(IREE::Flow::createCanonicalizerPass)
-      .addPass(mlir::createCSEPass);
+      .addPass(mlir::createCSEPass)
 
-  // Simplify util.global accesses early on; this can help with dispatch
-  // region formation as redundant store-loads are removed.
-  FunctionLikeNest(mainPassManager)
-      .addPass(IREE::Util::createSimplifyGlobalAccessesPass);
+      // Simplify util.global accesses early on; this can help with dispatch
+      // region formation as redundant store-loads are removed.
+      .addPass(IREE::Util::createSimplifyGlobalAccessesPass)
+
+      // Aggressive cleanup.
+      .addPass(IREE::Util::createApplyPatternsPass);
 
   // Module level cleanup and canonicalization of util.global (and other
   // util ops).
-  mainPassManager.addPass(IREE::Util::createApplyPatternsPass());
   mainPassManager.addPass(IREE::Util::createFoldGlobalsPass());
   mainPassManager.addPass(IREE::Util::createIPOPass());
-  mainPassManager.addPass(IREE::Flow::createCanonicalizerPass());
-  mainPassManager.addPass(createCSEPass());
+
+  FunctionLikeNest(mainPassManager)
+      .addPass(IREE::Util::createOptimizeIntArithmeticPass)
+      .addPass(IREE::Flow::createCanonicalizerPass)
+      .addPass(createCSEPass);
 
   if (transformOptions.options.constExprHoisting) {
     buildGlobalOptExprHoistingPassPipeline(mainPassManager, transformOptions);
@@ -210,16 +218,10 @@ void buildGlobalOptimizationPassPipeline(
 
   FunctionLikeNest(mainPassManager)
       .addPass(IREE::Flow::createCanonicalizerPass)
-      .addPass(mlir::createCSEPass);
-
-  FunctionLikeNest(mainPassManager)
+      .addPass(mlir::createCSEPass)
       // After running const-eval to a fixed point and folding unit extent dims,
       // try any new raising opportunities.
-      .addPass(createRaiseSpecialOpsPass)
-      // Strip std.assert & co after we perform optimizations; prior to this we
-      // may use the assertions to derive information during analysis.
-      .addPredicatedPass(transformOptions.options.stripAssertions,
-                         IREE::Util::createStripDebugOpsPass);
+      .addPass(createRaiseSpecialOpsPass);
 
   // Export after const-eval. If the user wants to keep the input constants
   // as is in the final parameter archive, they will probably want to disable

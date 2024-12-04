@@ -5,8 +5,12 @@
 #map2 = affine_map<(d0, d1, d2) -> (d0, d1)>
 #encoding_lhs = #iree_encoding.encoding<operand_index = 0, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map, #map1, #map2]>
 func.func @pack_unpack_gemm_lhs(%arg0 : tensor<?x?xf32>) -> tensor<?x?xf32> {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %d0 = tensor.dim %arg0, %c0 : tensor<?x?xf32>
+  %d1 = tensor.dim %arg0, %c1 : tensor<?x?xf32>
   %0 = iree_encoding.set_encoding %arg0 : tensor<?x?xf32> -> tensor<?x?xf32, #encoding_lhs>
-  %1 = iree_encoding.unset_encoding %0 : tensor<?x?xf32, #encoding_lhs> -> tensor<?x?xf32>
+  %1 = iree_encoding.unset_encoding %0 : tensor<?x?xf32, #encoding_lhs> -> tensor<?x?xf32>{%d0, %d1}
   return %1 : tensor<?x?xf32>
 }
 //      CHECK: func @pack_unpack_gemm_lhs(
@@ -22,12 +26,16 @@ func.func @pack_unpack_gemm_lhs(%arg0 : tensor<?x?xf32>) -> tensor<?x?xf32> {
 #encoding_rhs = #iree_encoding.encoding<operand_index = 1, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map, #map1, #map2]>
 #encoding_result = #iree_encoding.encoding<operand_index = 2, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map, #map1, #map2]>
 func.func @gemm_dynamic(%arg0 : tensor<?x?xf32>, %arg1 : tensor<?x?xf32>, %arg2 : tensor<?x?xf32>) -> tensor<?x?xf32> {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %M = tensor.dim %arg2, %c0 : tensor<?x?xf32>
+  %N = tensor.dim %arg2, %c1 : tensor<?x?xf32>
   %0 = iree_encoding.set_encoding %arg0 : tensor<?x?xf32> -> tensor<?x?xf32, #encoding_lhs>
   %1 = iree_encoding.set_encoding %arg1 : tensor<?x?xf32> -> tensor<?x?xf32, #encoding_rhs>
   %2 = iree_encoding.set_encoding %arg2 : tensor<?x?xf32> -> tensor<?x?xf32, #encoding_result>
   %3 = linalg.matmul ins(%0, %1 : tensor<?x?xf32, #encoding_lhs>, tensor<?x?xf32, #encoding_rhs>)
       outs(%2 : tensor<?x?xf32, #encoding_result>) -> tensor<?x?xf32, #encoding_result>
-  %4 = iree_encoding.unset_encoding %3 : tensor<?x?xf32, #encoding_result> -> tensor<?x?xf32>
+  %4 = iree_encoding.unset_encoding %3 : tensor<?x?xf32, #encoding_result> -> tensor<?x?xf32>{%M, %N}
   return %4 : tensor<?x?xf32>
 }
 //      CHECK: func @gemm_dynamic(
@@ -60,7 +68,7 @@ func.func @gemm_fill_dynamic(%arg0 : tensor<?x?xf32>, %arg1 : tensor<?x?xf32>) -
       -> tensor<?x?xf32, #encoding_result>
   %4 = linalg.matmul ins(%0, %1 : tensor<?x?xf32, #encoding_lhs>, tensor<?x?xf32, #encoding_rhs>)
       outs(%3 : tensor<?x?xf32, #encoding_result>) -> tensor<?x?xf32, #encoding_result>
-  %5 = iree_encoding.unset_encoding %4 : tensor<?x?xf32, #encoding_result> -> tensor<?x?xf32>
+  %5 = iree_encoding.unset_encoding %4 : tensor<?x?xf32, #encoding_result> -> tensor<?x?xf32>{%d0, %d1}
   return %5 : tensor<?x?xf32>
 }
 //      CHECK: func @gemm_fill_dynamic(
@@ -113,12 +121,18 @@ func.func @batch_matmul(%arg0 : tensor<128x80x32xf32>, %arg1 : tensor<128x32x320
 #encoding_rhs = #iree_encoding.encoding<operand_index = 1, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map, #map1, #map2]>
 #encoding_result = #iree_encoding.encoding<operand_index = 2, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map, #map1, #map2]>
 func.func @batch_matmul_dynamic(%arg0 : tensor<?x?x?xf32>, %arg1 : tensor<?x?x?xf32>, %arg2 : tensor<?x?x?xf32>) -> tensor<?x?x?xf32> {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c2 = arith.constant 2 : index
+  %B = tensor.dim %arg2, %c0 : tensor<?x?x?xf32>
+  %M = tensor.dim %arg2, %c1 : tensor<?x?x?xf32>
+  %N = tensor.dim %arg2, %c2 : tensor<?x?x?xf32>
   %0 = iree_encoding.set_encoding %arg0 : tensor<?x?x?xf32> -> tensor<?x?x?xf32, #encoding_lhs>
   %1 = iree_encoding.set_encoding %arg1 : tensor<?x?x?xf32> -> tensor<?x?x?xf32, #encoding_rhs>
   %2 = iree_encoding.set_encoding %arg2 : tensor<?x?x?xf32> -> tensor<?x?x?xf32, #encoding_result>
   %3 = linalg.batch_matmul ins(%0, %1 : tensor<?x?x?xf32, #encoding_lhs>, tensor<?x?x?xf32, #encoding_rhs>)
       outs(%2 : tensor<?x?x?xf32, #encoding_result>) -> tensor<?x?x?xf32, #encoding_result>
-  %4 = iree_encoding.unset_encoding %3 : tensor<?x?x?xf32, #encoding_result> -> tensor<?x?x?xf32>
+  %4 = iree_encoding.unset_encoding %3 : tensor<?x?x?xf32, #encoding_result> -> tensor<?x?x?xf32>{%B, %M, %N}
   return %4 : tensor<?x?x?xf32>
 }
 //      CHECK: func @batch_matmul_dynamic(
@@ -153,7 +167,7 @@ func.func @batch_matmul_fill_dynamic(%arg0 : tensor<?x?x?xf32>, %arg1 : tensor<?
       -> tensor<?x?x?xf32, #encoding_result>
   %4 = linalg.batch_matmul ins(%0, %1 : tensor<?x?x?xf32, #encoding_lhs>, tensor<?x?x?xf32, #encoding_rhs>)
       outs(%3 : tensor<?x?x?xf32, #encoding_result>) -> tensor<?x?x?xf32, #encoding_result>
-  %5 = iree_encoding.unset_encoding %4 : tensor<?x?x?xf32, #encoding_result> -> tensor<?x?x?xf32>
+  %5 = iree_encoding.unset_encoding %4 : tensor<?x?x?xf32, #encoding_result> -> tensor<?x?x?xf32>{%d0, %d1, %d2}
   return %5 : tensor<?x?x?xf32>
 }
 //      CHECK: func @batch_matmul_fill_dynamic(
@@ -179,7 +193,7 @@ func.func @batch_matmul_fill_dynamic(%arg0 : tensor<?x?x?xf32>, %arg1 : tensor<?
   #hal.pipeline.binding<storage_buffer>,
   #hal.pipeline.binding<storage_buffer>
 ]>
-#encoding_lhs = #iree_encoding.encoding<operand_index = 0, op_type = matmul, element_types = [f32, f32, f32], original_type = tensor<1x1xf32>, matmul_narrow_M = 1 : index, matmul_narrow_N = 1 : index, user_indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>, affine_map<(d0, d1, d2) -> (d2, d1)>, affine_map<(d0, d1, d2) -> (d0, d1)>]>
+#encoding_lhs = #iree_encoding.encoding<operand_index = 0, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>, affine_map<(d0, d1, d2) -> (d2, d1)>, affine_map<(d0, d1, d2) -> (d0, d1)>]>
 func.func @drop_encoding_for_hal_flow_ops_static() {
   %c0 = arith.constant 0 : index
   %0 = hal.interface.binding.subspan layout(#pipeline_layout) binding(0) alignment(64) offset(%c0) flags(ReadOnly) : !flow.dispatch.tensor<readonly:tensor<1x1xf32>>
@@ -201,7 +215,7 @@ func.func @drop_encoding_for_hal_flow_ops_static() {
   #hal.pipeline.binding<storage_buffer>,
   #hal.pipeline.binding<storage_buffer>
 ]>
-#encoding_lhs = #iree_encoding.encoding<operand_index = 0, op_type = matmul, element_types = [bf16, bf16, bf16], original_type = tensor<?x?xbf16>, user_indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>, affine_map<(d0, d1, d2) -> (d2, d1)>, affine_map<(d0, d1, d2) -> (d0, d1)>]>
+#encoding_lhs = #iree_encoding.encoding<operand_index = 0, op_type = matmul, element_types = [bf16, bf16, bf16], user_indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>, affine_map<(d0, d1, d2) -> (d2, d1)>, affine_map<(d0, d1, d2) -> (d0, d1)>]>
 func.func @drop_encoding_for_hal_flow_ops_dynamic() {
   %c0 = arith.constant 0 : index
   %c32_i64 = arith.constant 32 : i64

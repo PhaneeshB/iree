@@ -17,14 +17,12 @@ iree_lit_test_suite(
     "conv2d_to_im2col.mlir"
     "conv2d_to_winograd.mlir"
     "convert_to_loops.mlir"
-    "decompose_attention.mlir"
+    "convert_to_online_attention.mlir"
     "decompose_im2col.mlir"
-    "decompose_online_attention.mlir"
     "decompose_winograd.mlir"
     "distribution.mlir"
     "pad_contraction_to_block_size.mlir"
     "split_reduction.mlir"
-    "tile_attention.mlir"
     "tiling.mlir"
   TOOLS
     FileCheck

@@ -628,6 +628,7 @@ module attributes { transform.with_named_sequence } {
     transform.yield
   }
 }
+
 // CHECK-DAG:  #[[MAP0:.+]] = affine_map<(d0)[s0] -> (-d0 + s0, 10)>
 // CHECK:       func.func @topk_tile_tensor
 // CHECK-SAME:    %[[ARG0:[a-zA-Z0-9]+]]
@@ -744,7 +745,8 @@ module attributes { transform.with_named_sequence } {
 func.func @im2col(%arg0: tensor<2x34x34x640xf32>) -> tensor<2x1024x5760xf32> {
   %0 = tensor.empty() : tensor<2x1024x5760xf32>
   %1 = iree_linalg_ext.im2col strides = [1, 1] dilations = [1, 1] kernel_size = [3, 3]
-           m_offset = [34] k_offset = [1000] batch_pos = [0] m_pos = [1, 2] k_pos = [3]
+           m_offset = [34] * [1] k_offset = [1000] * [1]
+           batch_pos = [0] m_pos = [1, 2] k_pos = [3]
            ins(%arg0 : tensor<2x34x34x640xf32>)
            outs(%0 : tensor<2x1024x5760xf32>) -> tensor<2x1024x5760xf32>
   return %1 : tensor<2x1024x5760xf32>
@@ -769,11 +771,11 @@ module attributes { transform.with_named_sequence } {
 // CHECK-DAG:    %[[C0:.+]] = arith.constant 0 : index
 // CHECK:        %[[D0:.+]] = tensor.empty() : tensor<2x1024x5760xf32>
 // CHECK:        %[[RES0:.+]] = scf.for %[[ARG1:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C2]] step %[[C1]]
-// CHECK-SAME:       iter_args(%[[ARG2:[a-zA-Z0-9_]+]] = %[[D0]]) -> (tensor<2x1024x5760xf32>) {
+// CHECK-SAME:       iter_args(%[[ARG2:[a-zA-Z0-9_]+]] = %[[D0]]) -> (tensor<2x1024x5760xf32>)
 // CHECK:          %[[RES1:.+]] = scf.for %[[ARG3:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C1024]] step %[[C5]]
-// CHECK-SAME:       iter_args(%[[ARG4:[a-zA-Z0-9_]+]] = %[[ARG2]]) -> (tensor<2x1024x5760xf32>) {
+// CHECK-SAME:       iter_args(%[[ARG4:[a-zA-Z0-9_]+]] = %[[ARG2]]) -> (tensor<2x1024x5760xf32>)
 // CHECK:            %[[RES2:.+]] = scf.for %[[ARG5:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C5760]] step %[[C4]]
-// CHECK-SAME:         iter_args(%[[ARG6:[a-zA-Z0-9_]+]] = %[[ARG4]]) -> (tensor<2x1024x5760xf32>) {
+// CHECK-SAME:         iter_args(%[[ARG6:[a-zA-Z0-9_]+]] = %[[ARG4]]) -> (tensor<2x1024x5760xf32>)
 // CHECK-DAG:          %[[MSIZE:.+]] = affine.min #[[MAP]](%[[ARG3]])
 // CHECK-DAG:          %[[EXTRACTED_SLICE:.+]] = tensor.extract_slice %[[ARG0]][%[[ARG1]], 0, 0, 0]
 // CHECK-SAME:           [1, 34, 34, 640] [1, 1, 1, 1] : tensor<2x34x34x640xf32> to tensor<1x34x34x640xf32>
@@ -782,18 +784,16 @@ module attributes { transform.with_named_sequence } {
 // CHECK-DAG:          %[[KOFFSET:.+]] = affine.apply #[[MAP1]](%[[ARG5]])
 // CHECK-DAG:          %[[MOFFSET:.+]] = affine.apply #[[MAP2]](%[[ARG3]])
 // CHECK:              %[[IM2COL:.+]] = iree_linalg_ext.im2col strides = [1, 1] dilations = [1, 1] kernel_size = [3, 3]
-// CHECK-SAME:           m_offset = [%[[MOFFSET]]] k_offset = [%[[KOFFSET]]] batch_pos = [0] m_pos = [1, 2] k_pos = [3]
+// CHECK-SAME:           m_offset = [%[[MOFFSET]]] * [1] k_offset = [%[[KOFFSET]]] * [1]
+// CHECK-SAME:           batch_pos = [0] m_pos = [1, 2] k_pos = [3]
 // CHECK-SAME:           ins(%[[EXTRACTED_SLICE]] : tensor<1x34x34x640xf32>)
 // CHECK-SAME:           outs(%[[EXTRACTED_SLICE_0]] : tensor<1x?x4xf32>) -> tensor<1x?x4xf32>
 // CHECK:              %[[INSERTED_SLICE:.+]] = tensor.insert_slice %[[IM2COL]] into %[[ARG6]]
 // CHECK-SAME:           [%[[ARG1]], %[[ARG3]], %[[ARG5]]] [1, %[[MSIZE]], 4] [1, 1, 1]
 // CHECK-SAME:           tensor<1x?x4xf32> into tensor<2x1024x5760xf32>
 // CHECK:              scf.yield %[[INSERTED_SLICE]] : tensor<2x1024x5760xf32>
-// CHECK:            }
 // CHECK:            scf.yield %[[RES2]] : tensor<2x1024x5760xf32>
-// CHECK:          }
 // CHECK:          scf.yield %[[RES1]] : tensor<2x1024x5760xf32>
-// CHECK:        }
 // CHECK:        return %[[RES0]] : tensor<2x1024x5760xf32>
 
 // -----
@@ -801,7 +801,8 @@ module attributes { transform.with_named_sequence } {
 func.func @im2col_transposed_m_pos(%arg0: tensor<640x2x101x172xf32>) -> tensor<2x1024x5760xf32> {
   %0 = tensor.empty() : tensor<2x1024x5760xf32>
   %1 = iree_linalg_ext.im2col strides = [5, 3] dilations = [4, 7] kernel_size = [5, 2]
-           m_offset = [42] k_offset = [7] batch_pos = [1] m_pos = [3, 2] k_pos = [0]
+           m_offset = [42] * [1] k_offset = [7] * [1]
+           batch_pos = [1] m_pos = [3, 2] k_pos = [0]
            ins(%arg0 : tensor<640x2x101x172xf32>)
            outs(%0 : tensor<2x1024x5760xf32>) -> tensor<2x1024x5760xf32>
   return %1 : tensor<2x1024x5760xf32>
@@ -827,11 +828,11 @@ module attributes { transform.with_named_sequence } {
 // CHECK-DAG:    %[[C0:.+]] = arith.constant 0 : index
 // CHECK:        %[[D0:.+]] = tensor.empty() : tensor<2x1024x5760xf32>
 // CHECK:        %[[RES0:.+]] = scf.for %[[ARG1:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C2]] step %[[C1]]
-// CHECK-SAME:       iter_args(%[[ARG2:[a-zA-Z0-9_]+]] = %[[D0]]) -> (tensor<2x1024x5760xf32>) {
+// CHECK-SAME:       iter_args(%[[ARG2:[a-zA-Z0-9_]+]] = %[[D0]]) -> (tensor<2x1024x5760xf32>)
 // CHECK:          %[[RES1:.+]] = scf.for %[[ARG3:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C1024]] step %[[C9]]
-// CHECK-SAME:       iter_args(%[[ARG4:[a-zA-Z0-9_]+]] = %[[ARG2]]) -> (tensor<2x1024x5760xf32>) {
+// CHECK-SAME:       iter_args(%[[ARG4:[a-zA-Z0-9_]+]] = %[[ARG2]]) -> (tensor<2x1024x5760xf32>)
 // CHECK:            %[[RES2:.+]] = scf.for %[[ARG5:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C5760]] step %[[C7]]
-// CHECK-SAME:         iter_args(%[[ARG6:[a-zA-Z0-9_]+]] = %[[ARG4]]) -> (tensor<2x1024x5760xf32>) {
+// CHECK-SAME:         iter_args(%[[ARG6:[a-zA-Z0-9_]+]] = %[[ARG4]]) -> (tensor<2x1024x5760xf32>)
 // CHECK-DAG:          %[[MSIZE:.+]] = affine.min #[[MAP]](%[[ARG3]])
 // CHECK-DAG:          %[[KSIZE:.+]] = affine.min #[[MAP1]](%[[ARG5]])
 // CHECK-DAG:          %[[EXTRACTED_SLICE:.+]] = tensor.extract_slice %[[ARG0]][0, %[[ARG1]], 0, 0]
@@ -841,18 +842,16 @@ module attributes { transform.with_named_sequence } {
 // CHECK-DAG:          %[[KOFFSET:.+]] = affine.apply #[[MAP2]](%[[ARG5]])
 // CHECK-DAG:          %[[MOFFSET:.+]] = affine.apply #[[MAP3]](%[[ARG3]])
 // CHECK:              %[[IM2COL:.+]] = iree_linalg_ext.im2col strides = [5, 3] dilations = [4, 7] kernel_size = [5, 2]
-// CHECK-SAME:           m_offset = [%[[MOFFSET]]] k_offset = [%[[KOFFSET]]] batch_pos = [1] m_pos = [3, 2] k_pos = [0]
+// CHECK-SAME:           m_offset = [%[[MOFFSET]]] * [1] k_offset = [%[[KOFFSET]]] * [1]
+// CHECK-SAME:           batch_pos = [1] m_pos = [3, 2] k_pos = [0]
 // CHECK-SAME:           ins(%[[EXTRACTED_SLICE]] : tensor<640x1x101x172xf32>)
 // CHECK-SAME:           outs(%[[EXTRACTED_SLICE_0]] : tensor<1x?x?xf32>) -> tensor<1x?x?xf32>
 // CHECK:              %[[INSERTED_SLICE:.+]] = tensor.insert_slice %[[IM2COL]] into %[[ARG6]]
 // CHECK-SAME:           [%[[ARG1]], %[[ARG3]], %[[ARG5]]] [1, %[[MSIZE]], %[[KSIZE]]] [1, 1, 1]
 // CHECK-SAME:           tensor<1x?x?xf32> into tensor<2x1024x5760xf32>
 // CHECK:              scf.yield %[[INSERTED_SLICE]] : tensor<2x1024x5760xf32>
-// CHECK:            }
 // CHECK:            scf.yield %[[RES2]] : tensor<2x1024x5760xf32>
-// CHECK:          }
 // CHECK:          scf.yield %[[RES1]] : tensor<2x1024x5760xf32>
-// CHECK:        }
 // CHECK:        return %[[RES0]] : tensor<2x1024x5760xf32>
 
 // -----
@@ -861,7 +860,8 @@ func.func @im2col_dynamic(%arg0: tensor<?x?x?x?xf32>, %s0: index, %s1: index, %s
                           %mOffset: index, %kOffset: index) -> tensor<?x?x?xf32> {
   %0 = tensor.empty(%s0, %s1, %s2) : tensor<?x?x?xf32>
   %1 = iree_linalg_ext.im2col strides = [1, 1] dilations = [1, 1] kernel_size = [3, 3]
-           m_offset = [%mOffset] k_offset = [%kOffset] batch_pos = [0] m_pos = [1, 2] k_pos = [3]
+           m_offset = [%mOffset] * [1] k_offset = [%kOffset] * [1]
+           batch_pos = [0] m_pos = [1, 2] k_pos = [3]
            ins(%arg0 : tensor<?x?x?x?xf32>)
            outs(%0 : tensor<?x?x?xf32>) -> tensor<?x?x?xf32>
   return %1 : tensor<?x?x?xf32>
@@ -887,11 +887,11 @@ module attributes { transform.with_named_sequence } {
 // CHECK-DAG:    %[[C0:.+]] = arith.constant 0 : index
 // CHECK:        %[[D0:.+]] = tensor.empty(%[[S0]], %[[S1]], %[[S2]]) : tensor<?x?x?xf32>
 // CHECK:        %[[RES0:.+]] = scf.for %[[ARG1:[a-zA-Z0-9_]+]] = %[[C0]] to %[[S0]] step %[[C2]]
-// CHECK-SAME:       iter_args(%[[ARG2:[a-zA-Z0-9_]+]] = %[[D0]]) -> (tensor<?x?x?xf32>) {
+// CHECK-SAME:       iter_args(%[[ARG2:[a-zA-Z0-9_]+]] = %[[D0]]) -> (tensor<?x?x?xf32>)
 // CHECK:          %[[RES1:.+]] = scf.for %[[ARG3:[a-zA-Z0-9_]+]] = %[[C0]] to %[[S1]] step %[[C7]]
-// CHECK-SAME:       iter_args(%[[ARG4:[a-zA-Z0-9_]+]] = %[[ARG2]]) -> (tensor<?x?x?xf32>) {
+// CHECK-SAME:       iter_args(%[[ARG4:[a-zA-Z0-9_]+]] = %[[ARG2]]) -> (tensor<?x?x?xf32>)
 // CHECK:            %[[RES2:.+]] = scf.for %[[ARG5:[a-zA-Z0-9_]+]] = %[[C0]] to %[[S2]] step %[[C5]]
-// CHECK-SAME:         iter_args(%[[ARG6:[a-zA-Z0-9_]+]] = %[[ARG4]]) -> (tensor<?x?x?xf32>) {
+// CHECK-SAME:         iter_args(%[[ARG6:[a-zA-Z0-9_]+]] = %[[ARG4]]) -> (tensor<?x?x?xf32>)
 // CHECK-DAG:          %[[BSIZE:.+]] = affine.min #[[MAP]](%[[ARG1]])
 // CHECK-DAG:          %[[MSIZE:.+]] = affine.min #[[MAP1]](%[[ARG3]])
 // CHECK-DAG:          %[[KSIZE:.+]] = affine.min #[[MAP2]](%[[ARG5]])
@@ -905,19 +905,86 @@ module attributes { transform.with_named_sequence } {
 // CHECK-DAG:          %[[KOFFSET:.+]] = affine.apply #[[MAP3]](%[[ARG5]])[%[[KOFF]]]
 // CHECK-DAG:          %[[MOFFSET:.+]] = affine.apply #[[MAP3]](%[[ARG3]])[%[[MOFF]]]
 // CHECK:              %[[IM2COL:.+]] = iree_linalg_ext.im2col strides = [1, 1] dilations = [1, 1] kernel_size = [3, 3]
-// CHECK-SAME:           m_offset = [%[[MOFFSET]]] k_offset = [%[[KOFFSET]]] batch_pos = [0] m_pos = [1, 2] k_pos = [3]
+// CHECK-SAME:           m_offset = [%[[MOFFSET]]] * [1] k_offset = [%[[KOFFSET]]] * [1]
+// CHECK-SAME:           batch_pos = [0] m_pos = [1, 2] k_pos = [3]
 // CHECK-SAME:           ins(%[[EXTRACTED_SLICE]] : tensor<?x?x?x?xf32>)
 // CHECK-SAME:           outs(%[[EXTRACTED_SLICE_0]] : tensor<?x?x?xf32>) -> tensor<?x?x?xf32>
 // CHECK:              %[[INSERTED_SLICE:.+]] = tensor.insert_slice %[[IM2COL]] into %[[ARG6]]
 // CHECK-SAME:           [%[[ARG1]], %[[ARG3]], %[[ARG5]]] [%[[BSIZE]], %[[MSIZE]], %[[KSIZE]]] [1, 1, 1]
 // CHECK-SAME:           tensor<?x?x?xf32> into tensor<?x?x?xf32>
 // CHECK:              scf.yield %[[INSERTED_SLICE]] : tensor<?x?x?xf32>
-// CHECK:            }
 // CHECK:            scf.yield %[[RES2]] : tensor<?x?x?xf32>
-// CHECK:          }
 // CHECK:          scf.yield %[[RES1]] : tensor<?x?x?xf32>
-// CHECK:        }
 // CHECK:        return %[[RES0]] : tensor<?x?x?xf32>
+
+// -----
+
+module {
+  func.func @im2col_expanded(%arg0: tensor<2x34x34x640xf32>, %m_stride: index) -> tensor<2x32x32x1440x4xf32> {
+    %0 = tensor.empty() : tensor<2x32x32x1440x4xf32>
+    %7 = iree_linalg_ext.im2col
+            strides = [1, 1] dilations = [1, 1] kernel_size = [3, 3]
+            m_offset = [0, 0] * [%m_stride, 1] k_offset = [0, 0] * [4, 1]
+            batch_pos = [0] m_pos = [1, 2] k_pos = [3]
+            ins(%arg0 : tensor<2x34x34x640xf32>)
+            outs(%0 : tensor<2x32x32x1440x4xf32>) -> tensor<2x32x32x1440x4xf32>
+    return %7 : tensor<2x32x32x1440x4xf32>
+  }
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["iree_linalg_ext.im2col"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %1, %loops:5 = transform.structured.tile_using_for %0 tile_sizes [1, 7, 5, 11, 2] : (!transform.any_op) -> (!transform.any_op, !transform.any_op, !transform.any_op, !transform.any_op, !transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+// CHECK-DAG:  #[[MAP:.+]] = affine_map<(d0) -> (-d0 + 32, 7)>
+// CHECK-DAG:  #[[MAP1:.+]] = affine_map<(d0) -> (-d0 + 32, 5)>
+// CHECK-DAG:  #[[MAP2:.+]] = affine_map<(d0) -> (-d0 + 1440, 11)>
+// CHECK:      func.func @im2col_expanded
+// CHECK-SAME:   %[[ARG0:[a-zA-Z0-9_]+]]: tensor<2x34x34x640xf32>
+// CHECK-SAME:   %[[M_STRIDE:[a-zA-Z0-9_]+]]: index
+// CHECK-DAG:    %[[C11:.+]] = arith.constant 11 : index
+// CHECK-DAG:    %[[C5:.+]] = arith.constant 5 : index
+// CHECK-DAG:    %[[C7:.+]] = arith.constant 7 : index
+// CHECK-DAG:    %[[C1:.+]] = arith.constant 1 : index
+// CHECK-DAG:    %[[C0:.+]] = arith.constant 0 : index
+// CHECK-DAG:    %[[C4:.+]] = arith.constant 4 : index
+// CHECK-DAG:    %[[C1440:.+]] = arith.constant 1440 : index
+// CHECK-DAG:    %[[C32:.+]] = arith.constant 32 : index
+// CHECK-DAG:    %[[C2:.+]] = arith.constant 2 : index
+// CHECK:        %[[D0:.+]] = tensor.empty() : tensor<2x32x32x1440x4xf32>
+// CHECK:        %[[RES0:.+]] = scf.for %[[ARG1:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C2]] step %[[C1]]
+// CHECK-SAME:       iter_args(%[[ARG2:[a-zA-Z0-9_]+]] = %[[D0]]) -> (tensor<2x32x32x1440x4xf32>)
+// CHECK:          %[[RES1:.+]] = scf.for %[[ARG3:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C32]] step %[[C7]]
+// CHECK-SAME:       iter_args(%[[ARG4:[a-zA-Z0-9_]+]] = %[[ARG2]]) -> (tensor<2x32x32x1440x4xf32>)
+// CHECK:            %[[RES2:.+]] = scf.for %[[ARG5:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C32]] step %[[C5]]
+// CHECK-SAME:         iter_args(%[[ARG6:[a-zA-Z0-9_]+]] = %[[ARG4]]) -> (tensor<2x32x32x1440x4xf32>)
+// CHECK:              %[[RES3:.+]] = scf.for %[[ARG7:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C1440]] step %[[C11]]
+// CHECK-SAME:           iter_args(%[[ARG8:[a-zA-Z0-9_]+]] = %[[ARG6]]) -> (tensor<2x32x32x1440x4xf32>)
+// CHECK:                %[[RES4:.+]] = scf.for %[[ARG9:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C4]] step %[[C2]]
+// CHECK-SAME:             iter_args(%[[ARG10:[a-zA-Z0-9_]+]] = %[[ARG8]]) -> (tensor<2x32x32x1440x4xf32>)
+// CHECK-DAG:              %[[M0SIZE:.+]] = affine.min #[[MAP]](%[[ARG3]])
+// CHECK-DAG:              %[[M1SIZE:.+]] = affine.min #[[MAP1]](%[[ARG5]])
+// CHECK-DAG:              %[[K0SIZE:.+]] = affine.min #[[MAP2]](%[[ARG7]])
+// CHECK-DAG:              %[[EXTRACTED_SLICE:.+]] = tensor.extract_slice %[[ARG0]][%[[ARG1]], 0, 0, 0]
+// CHECK-SAME:               [1, 34, 34, 640] [1, 1, 1, 1] : tensor<2x34x34x640xf32> to tensor<1x34x34x640xf32>
+// CHECK-DAG:              %[[EXTRACTED_SLICE_0:.+]] = tensor.extract_slice %[[ARG10]][%[[ARG1]], %[[ARG3]], %[[ARG5]], %[[ARG7]], %[[ARG9]]]
+// CHECK-SAME:               [1, %[[M0SIZE]], %[[M1SIZE]], %[[K0SIZE]], 2] [1, 1, 1, 1, 1] : tensor<2x32x32x1440x4xf32> to tensor<1x?x?x?x2xf32>
+// CHECK:                  %[[IM2COL:.+]] = iree_linalg_ext.im2col strides = [1, 1] dilations = [1, 1] kernel_size = [3, 3]
+// CHECK-SAME:               m_offset = [%[[ARG3]], %[[ARG5]]] * [%[[M_STRIDE]], 1] k_offset = [%[[ARG7]], %[[ARG9]]] * [4, 1]
+// CHECK-SAME:               batch_pos = [0] m_pos = [1, 2] k_pos = [3]
+// CHECK-SAME:               ins(%[[EXTRACTED_SLICE]] : tensor<1x34x34x640xf32>)
+// CHECK-SAME:               outs(%[[EXTRACTED_SLICE_0]] : tensor<1x?x?x?x2xf32>) -> tensor<1x?x?x?x2xf32>
+// CHECK:                  %[[INSERTED_SLICE:.+]] = tensor.insert_slice %[[IM2COL]] into %[[ARG10]]
+// CHECK-SAME:               [%[[ARG1]], %[[ARG3]], %[[ARG5]], %[[ARG7]], %[[ARG9]]] [1, %[[M0SIZE]], %[[M1SIZE]], %[[K0SIZE]], 2] [1, 1, 1, 1, 1]
+// CHECK-SAME:               tensor<1x?x?x?x2xf32> into tensor<2x32x32x1440x4xf32>
+// CHECK:                  scf.yield %[[INSERTED_SLICE]] : tensor<2x32x32x1440x4xf32>
+// CHECK:                scf.yield %[[RES4]] : tensor<2x32x32x1440x4xf32>
+// CHECK:              scf.yield %[[RES3]] : tensor<2x32x32x1440x4xf32>
+// CHECK:            scf.yield %[[RES2]] : tensor<2x32x32x1440x4xf32>
+// CHECK:          scf.yield %[[RES1]] : tensor<2x32x32x1440x4xf32>
+// CHECK:        return %[[RES0]] : tensor<2x32x32x1440x4xf32>
 
 // -----
 
@@ -1537,8 +1604,12 @@ func.func @attention(%query: tensor<192x1024x64xf32>, %key: tensor<192x1024x64xf
   %1 = iree_linalg_ext.attention {indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>,
+                     affine_map<(d0, d1, d2, d3, d4) -> ()>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>]}
-                     ins(%query, %key, %value, %scale : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32) outs(%0 : tensor<192x1024x64xf32>) -> tensor<192x1024x64xf32>
+                     ins(%query, %key, %value, %scale : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32) outs(%0 : tensor<192x1024x64xf32>) {
+                      ^bb0(%score: f32):
+                        iree_linalg_ext.yield %score: f32
+                     } -> tensor<192x1024x64xf32>
   return %1 : tensor<192x1024x64xf32>
 }
 module attributes { transform.with_named_sequence } {
@@ -1553,6 +1624,7 @@ module attributes { transform.with_named_sequence } {
 // CHECK-DAG:  #[[MAP_Q:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>
 // CHECK-DAG:  #[[MAP_K:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>
 // CHECK-DAG:  #[[MAP_V:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>
+// CHECK-DAG:  #[[MAP_S:.+]] = affine_map<(d0, d1, d2, d3, d4) -> ()>
 // CHECK-DAG:  #[[MAP_O:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>
 
 // CHECK:      func.func @attention(%[[ARG0:[a-zA-Z0-9_]+]]: tensor<192x1024x64xf32>, %[[ARG1:[a-zA-Z0-9_]+]]:
@@ -1580,10 +1652,13 @@ module attributes { transform.with_named_sequence } {
 // CHECK:            %[[EXTRACTED_SLICE_2:.+]] = tensor.extract_slice %[[ARG6]][%[[ARG3]], %[[ARG5]], 0] [%[[D2]],
 // CHECK-SAME:         %[[D4]], 64] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<?x?x64xf32>
 // CHECK:            %[[D5:.+]] = iree_linalg_ext.attention
-// CHECK-SAME:                     {indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_O]]]}
+// CHECK-SAME:                     {indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_S]], #[[MAP_O]]]}
 // CHECK-SAME:                    ins(%[[EXTRACTED_SLICE]], %[[EXTRACTED_SLICE_0]],
 // CHECK-SAME:         %[[EXTRACTED_SLICE_1]], %[[C1_F32]] : tensor<?x?x64xf32>, tensor<?x1024x64xf32>, tensor<?x1024x64xf32>, f32)
-// CHECK-SAME:         outs(%[[EXTRACTED_SLICE_2]] : tensor<?x?x64xf32>) -> tensor<?x?x64xf32>
+// CHECK-SAME:         outs(%[[EXTRACTED_SLICE_2]] : tensor<?x?x64xf32>) {
+// CHECK:                ^[[BLOCK:.+]](%[[SCORE:.+]]: f32):
+// CHECK:                  iree_linalg_ext.yield %[[SCORE]] : f32
+// CHECK:                } -> tensor<?x?x64xf32>
 // CHECK:            %[[INSERTED_SLICE:.+]] = tensor.insert_slice %[[D5]] into %[[ARG6]][%[[ARG3]], %[[ARG5]], 0]
 // CHECK-SAME:         [%[[D2]], %[[D4]], 64] [1, 1, 1] : tensor<?x?x64xf32> into tensor<192x1024x64xf32>
 // CHECK:            scf.yield %[[INSERTED_SLICE]] : tensor<192x1024x64xf32>
@@ -1595,13 +1670,169 @@ module attributes { transform.with_named_sequence } {
 
 // -----
 
+func.func @attention_float_mask(%query: tensor<192x1024x64xf32>, %key: tensor<192x1024x64xf32>, %value: tensor<192x1024x64xf32>, %mask: tensor<192x1024x1024xf32>) -> tensor<192x1024x64xf32> {
+  %0 = tensor.empty() : tensor<192x1024x64xf32>
+  %scale = arith.constant 1.0 : f32
+  %1 = iree_linalg_ext.attention {indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
+                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>,
+                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>,
+                     affine_map<(d0, d1, d2, d3, d4) -> ()>,
+                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d3)>,
+                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>]}
+                     ins(%query, %key, %value, %scale, %mask : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32, tensor<192x1024x1024xf32>) outs(%0 : tensor<192x1024x64xf32>) {
+                      ^bb0(%score: f32):
+                        iree_linalg_ext.yield %score: f32
+                     } -> tensor<192x1024x64xf32>
+  return %1 : tensor<192x1024x64xf32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["iree_linalg_ext.attention"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %1, %loops:2 = transform.structured.tile_using_for %0 tile_sizes [10, 30] : (!transform.any_op) -> (!transform.any_op, !transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+// CHECK-DAG:  #[[MAP:.+]] = affine_map<(d0) -> (-d0 + 192, 10)>
+// CHECK-DAG:  #[[MAP1:.+]] = affine_map<(d0) -> (-d0 + 1024, 30)>
+// CHECK-DAG:  #[[MAP_Q:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>
+// CHECK-DAG:  #[[MAP_K:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>
+// CHECK-DAG:  #[[MAP_V:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>
+// CHECK-DAG:  #[[MAP_S:.+]] = affine_map<(d0, d1, d2, d3, d4) -> ()>
+// CHECK-DAG:  #[[MAP_M:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d3)>
+// CHECK-DAG:  #[[MAP_O:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>
+
+// CHECK:      func.func @attention_float_mask(%[[ARG0:[a-zA-Z0-9_]+]]: tensor<192x1024x64xf32>, %[[ARG1:[a-zA-Z0-9_]+]]:
+// CHECK-SAME:   tensor<192x1024x64xf32>, %[[ARG2:[a-zA-Z0-9_]+]]: tensor<192x1024x64xf32>, %[[ARG3:[a-zA-Z0-9_]+]]: tensor<192x1024x1024xf32>) -> tensor<192x1024x64xf32>
+// CHECK-SAME:   {
+// CHECK-DAG:    %[[C30:.+]] = arith.constant 30 : index
+// CHECK-DAG:    %[[C1_F32:.+]] = arith.constant 1.000000e+00 : f32
+// CHECK-DAG:    %[[C0:.+]] = arith.constant 0 : index
+// CHECK-DAG:    %[[C192:.+]] = arith.constant 192 : index
+// CHECK-DAG:    %[[C1024:.+]] = arith.constant 1024 : index
+// CHECK-DAG:    %[[C10:.+]] = arith.constant 10 : index
+// CHECK-DAG:    %[[D0:.+]] = tensor.empty() : tensor<192x1024x64xf32>
+// CHECK:        %[[D1:.+]] = scf.for %[[ARG4:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C192]] step %[[C10]]
+// CHECK-SAME:     iter_args(%[[ARG5:[a-zA-Z0-9_]+]] = %[[D0]]) -> (tensor<192x1024x64xf32>) {
+// CHECK:          %[[D2:.+]] = scf.for %[[ARG6:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C1024]] step %[[C30]]
+// CHECK-SAME:       iter_args(%[[ARG7:[a-zA-Z0-9_]+]] = %[[ARG5]]) -> (tensor<192x1024x64xf32>) {
+// CHECK-DAG:        %[[D3:.+]] = affine.min #[[MAP]](%[[ARG4]])
+// CHECK-DAG:        %[[D4:.+]] = affine.min #[[MAP1]](%[[ARG6]])
+// CHECK:            %[[EXTRACTED_SLICE:.+]] = tensor.extract_slice %[[ARG0]][%[[ARG4]], %[[ARG6]], 0] [%[[D3]],
+// CHECK-SAME:         %[[D4]], 64] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<?x?x64xf32>
+// CHECK:            %[[EXTRACTED_SLICE_0:.+]] = tensor.extract_slice %[[ARG1]][%[[ARG4]], 0, 0] [%[[D3]], 1024, 64] [1,
+// CHECK-SAME:         1, 1] : tensor<192x1024x64xf32> to tensor<?x1024x64xf32>
+// CHECK:            %[[EXTRACTED_SLICE_1:.+]] = tensor.extract_slice %[[ARG2]][%[[ARG4]], 0, 0] [%[[D3]], 1024, 64] [1,
+// CHECK-SAME:         1, 1] : tensor<192x1024x64xf32> to tensor<?x1024x64xf32>
+// CHECK:            %[[EXTRACTED_SLICE_2:.+]] = tensor.extract_slice %[[ARG3]][%[[ARG4]], %[[ARG6]], 0] [%[[D3]],
+// CHECK-SAME:         %[[D4]], 1024] [1, 1, 1] : tensor<192x1024x1024xf32> to tensor<?x?x1024xf32>
+// CHECK:            %[[EXTRACTED_SLICE_3:.+]] = tensor.extract_slice %[[ARG7]][%[[ARG4]], %[[ARG6]], 0] [%[[D3]],
+// CHECK-SAME:         %[[D4]], 64] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<?x?x64xf32>
+// CHECK:            %[[D5:.+]] = iree_linalg_ext.attention
+// CHECK-SAME:                     {indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_S]], #[[MAP_M]], #[[MAP_O]]]}
+// CHECK-SAME:                    ins(%[[EXTRACTED_SLICE]], %[[EXTRACTED_SLICE_0]],
+// CHECK-SAME:         %[[EXTRACTED_SLICE_1]], %[[C1_F32]], %[[EXTRACTED_SLICE_2]] : tensor<?x?x64xf32>, tensor<?x1024x64xf32>, tensor<?x1024x64xf32>, f32, tensor<?x?x1024xf32>)
+// CHECK-SAME:         outs(%[[EXTRACTED_SLICE_3]] : tensor<?x?x64xf32>)
+// CHECK:                ^[[BLOCK:.+]](%[[SCORE:.+]]: f32):
+// CHECK:                  iree_linalg_ext.yield %[[SCORE]] : f32
+// CHECK:                } -> tensor<?x?x64xf32>
+// CHECK:            %[[INSERTED_SLICE:.+]] = tensor.insert_slice %[[D5]] into %[[ARG7]][%[[ARG4]], %[[ARG6]], 0]
+// CHECK-SAME:         [%[[D3]], %[[D4]], 64] [1, 1, 1] : tensor<?x?x64xf32> into tensor<192x1024x64xf32>
+// CHECK:            scf.yield %[[INSERTED_SLICE]] : tensor<192x1024x64xf32>
+// CHECK:          }
+// CHECK:          scf.yield %[[D2]] : tensor<192x1024x64xf32>
+// CHECK:        }
+// CHECK:        return %[[D1]] : tensor<192x1024x64xf32>
+// CHECK:      }
+
+// -----
+
+func.func @attention_bool_mask(%query: tensor<192x1024x64xf32>, %key: tensor<192x1024x64xf32>, %value: tensor<192x1024x64xf32>, %mask: tensor<192x1024x1024xi1>) -> tensor<192x1024x64xf32> {
+  %0 = tensor.empty() : tensor<192x1024x64xf32>
+  %scale = arith.constant 1.0 : f32
+  %1 = iree_linalg_ext.attention {indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
+                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>,
+                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>,
+                     affine_map<(d0, d1, d2, d3, d4) -> ()>,
+                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d3)>,
+                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>]}
+                     ins(%query, %key, %value, %scale, %mask : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32, tensor<192x1024x1024xi1>) outs(%0 : tensor<192x1024x64xf32>) {
+                      ^bb0(%score: f32):
+                        iree_linalg_ext.yield %score: f32
+                     } -> tensor<192x1024x64xf32>
+  return %1 : tensor<192x1024x64xf32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["iree_linalg_ext.attention"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %1, %loops:2 = transform.structured.tile_using_for %0 tile_sizes [10, 30] : (!transform.any_op) -> (!transform.any_op, !transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+// CHECK-DAG:  #[[MAP:.+]] = affine_map<(d0) -> (-d0 + 192, 10)>
+// CHECK-DAG:  #[[MAP1:.+]] = affine_map<(d0) -> (-d0 + 1024, 30)>
+// CHECK-DAG:  #[[MAP_Q:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>
+// CHECK-DAG:  #[[MAP_K:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>
+// CHECK-DAG:  #[[MAP_V:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>
+// CHECK-DAG:  #[[MAP_S:.+]] = affine_map<(d0, d1, d2, d3, d4) -> ()>
+// CHECK-DAG:  #[[MAP_M:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d3)>
+// CHECK-DAG:  #[[MAP_O:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>
+
+// CHECK:      func.func @attention_bool_mask(%[[ARG0:[a-zA-Z0-9_]+]]: tensor<192x1024x64xf32>, %[[ARG1:[a-zA-Z0-9_]+]]:
+// CHECK-SAME:   tensor<192x1024x64xf32>, %[[ARG2:[a-zA-Z0-9_]+]]: tensor<192x1024x64xf32>, %[[ARG3:[a-zA-Z0-9_]+]]: tensor<192x1024x1024xi1>) -> tensor<192x1024x64xf32>
+// CHECK-SAME:   {
+// CHECK-DAG:    %[[C30:.+]] = arith.constant 30 : index
+// CHECK-DAG:    %[[C1_F32:.+]] = arith.constant 1.000000e+00 : f32
+// CHECK-DAG:    %[[C0:.+]] = arith.constant 0 : index
+// CHECK-DAG:    %[[C192:.+]] = arith.constant 192 : index
+// CHECK-DAG:    %[[C1024:.+]] = arith.constant 1024 : index
+// CHECK-DAG:    %[[C10:.+]] = arith.constant 10 : index
+// CHECK-DAG:    %[[D0:.+]] = tensor.empty() : tensor<192x1024x64xf32>
+// CHECK:        %[[D1:.+]] = scf.for %[[ARG4:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C192]] step %[[C10]]
+// CHECK-SAME:     iter_args(%[[ARG5:[a-zA-Z0-9_]+]] = %[[D0]]) -> (tensor<192x1024x64xf32>) {
+// CHECK:          %[[D2:.+]] = scf.for %[[ARG6:[a-zA-Z0-9_]+]] = %[[C0]] to %[[C1024]] step %[[C30]]
+// CHECK-SAME:       iter_args(%[[ARG7:[a-zA-Z0-9_]+]] = %[[ARG5]]) -> (tensor<192x1024x64xf32>) {
+// CHECK-DAG:        %[[D3:.+]] = affine.min #[[MAP]](%[[ARG4]])
+// CHECK-DAG:        %[[D4:.+]] = affine.min #[[MAP1]](%[[ARG6]])
+// CHECK:            %[[EXTRACTED_SLICE:.+]] = tensor.extract_slice %[[ARG0]][%[[ARG4]], %[[ARG6]], 0] [%[[D3]],
+// CHECK-SAME:         %[[D4]], 64] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<?x?x64xf32>
+// CHECK:            %[[EXTRACTED_SLICE_0:.+]] = tensor.extract_slice %[[ARG1]][%[[ARG4]], 0, 0] [%[[D3]], 1024, 64] [1,
+// CHECK-SAME:         1, 1] : tensor<192x1024x64xf32> to tensor<?x1024x64xf32>
+// CHECK:            %[[EXTRACTED_SLICE_1:.+]] = tensor.extract_slice %[[ARG2]][%[[ARG4]], 0, 0] [%[[D3]], 1024, 64] [1,
+// CHECK-SAME:         1, 1] : tensor<192x1024x64xf32> to tensor<?x1024x64xf32>
+// CHECK:            %[[EXTRACTED_SLICE_2:.+]] = tensor.extract_slice %[[ARG3]][%[[ARG4]], %[[ARG6]], 0] [%[[D3]],
+// CHECK-SAME:         %[[D4]], 1024] [1, 1, 1] : tensor<192x1024x1024xi1> to tensor<?x?x1024xi1>
+// CHECK:            %[[EXTRACTED_SLICE_3:.+]] = tensor.extract_slice %[[ARG7]][%[[ARG4]], %[[ARG6]], 0] [%[[D3]],
+// CHECK-SAME:         %[[D4]], 64] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<?x?x64xf32>
+// CHECK:            %[[D5:.+]] = iree_linalg_ext.attention
+// CHECK-SAME:                     {indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_S]], #[[MAP_M]], #[[MAP_O]]]}
+// CHECK-SAME:                    ins(%[[EXTRACTED_SLICE]], %[[EXTRACTED_SLICE_0]],
+// CHECK-SAME:         %[[EXTRACTED_SLICE_1]], %[[C1_F32]], %[[EXTRACTED_SLICE_2]] : tensor<?x?x64xf32>, tensor<?x1024x64xf32>, tensor<?x1024x64xf32>, f32, tensor<?x?x1024xi1>)
+// CHECK-SAME:         outs(%[[EXTRACTED_SLICE_3]] : tensor<?x?x64xf32>)
+// CHECK:                ^[[BLOCK:.+]](%[[SCORE:.+]]: f32):
+// CHECK:                  iree_linalg_ext.yield %[[SCORE]] : f32
+// CHECK:              } -> tensor<?x?x64xf32>
+// CHECK:            %[[INSERTED_SLICE:.+]] = tensor.insert_slice %[[D5]] into %[[ARG7]][%[[ARG4]], %[[ARG6]], 0]
+// CHECK-SAME:         [%[[D3]], %[[D4]], 64] [1, 1, 1] : tensor<?x?x64xf32> into tensor<192x1024x64xf32>
+// CHECK:            scf.yield %[[INSERTED_SLICE]] : tensor<192x1024x64xf32>
+// CHECK:          }
+// CHECK:          scf.yield %[[D2]] : tensor<192x1024x64xf32>
+// CHECK:        }
+// CHECK:        return %[[D1]] : tensor<192x1024x64xf32>
+// CHECK:      }
+
+// -----
+
 func.func @attention_memref(%query: memref<192x1024x64xf32>, %key: memref<192x1024x64xf32>, %value: memref<192x1024x64xf32>, %output: memref<192x1024x64xf32>) {
   %scale = arith.constant 1.0 : f32
   iree_linalg_ext.attention {indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>,
+                     affine_map<(d0, d1, d2, d3, d4) -> ()>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>]}
-                     ins(%query, %key, %value, %scale : memref<192x1024x64xf32>, memref<192x1024x64xf32>, memref<192x1024x64xf32>, f32) outs(%output : memref<192x1024x64xf32>)
+                     ins(%query, %key, %value, %scale : memref<192x1024x64xf32>, memref<192x1024x64xf32>, memref<192x1024x64xf32>, f32) outs(%output : memref<192x1024x64xf32>) {
+                      ^bb0(%score: f32):
+                        iree_linalg_ext.yield %score: f32
+                     }
   return
 }
 module attributes { transform.with_named_sequence } {
@@ -1616,6 +1847,7 @@ module attributes { transform.with_named_sequence } {
 // CHECK-DAG:  #[[MAP_Q:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>
 // CHECK-DAG:  #[[MAP_K:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>
 // CHECK-DAG:  #[[MAP_V:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>
+// CHECK-DAG:  #[[MAP_S:.+]] = affine_map<(d0, d1, d2, d3, d4) -> ()>
 // CHECK-DAG:  #[[MAP_O:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>
 
 // CHECK:      func.func @attention_memref(%[[ARG0:[a-zA-Z0-9_]+]]: memref<192x1024x64xf32>, %[[ARG1:[a-zA-Z0-9_]+]]:
@@ -1640,7 +1872,7 @@ module attributes { transform.with_named_sequence } {
 // CHECK:            %[[SUBVIEW_2:.+]] = memref.subview %[[ARG3]][%[[ARG4]], %[[ARG5]], 0] [%[[D0]], %[[D1]], 64] [1, 1,
 // CHECK-SAME:         1] : memref<192x1024x64xf32> to memref<?x?x64xf32, strided<[65536, 64, 1], offset: ?>>
 // CHECK:            iree_linalg_ext.attention
-// CHECK-SAME:                     {indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_O]]]}
+// CHECK-SAME:                     {indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_S]], #[[MAP_O]]]}
 // CHECK-SAME:         ins(%[[SUBVIEW]], %[[SUBVIEW_0]], %[[SUBVIEW_1]], %[[C1_F32]] : memref<?x?x64xf32,
 // CHECK-SAME:         strided<[65536, 64, 1], offset: ?>>, memref<?x1024x64xf32, strided<[65536, 64, 1], offset: ?>>,
 // CHECK-SAME:         memref<?x1024x64xf32, strided<[65536, 64, 1], offset: ?>>, f32) outs(%[[SUBVIEW_2]] :
@@ -1662,9 +1894,13 @@ func.func @attention_fusion(
       indexing_maps = [affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2, d3)>,
                        affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d4, d3)>,
                        affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d4, d5)>,
+                       affine_map<(d0, d1, d2, d3, d4, d5) -> ()>,
                        affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2, d5)>]}
       ins(%query, %key, %value, %scale : tensor<2x10x4096x64xf16>, tensor<2x10x4096x64xf16>, tensor<2x10x4096x64xf16>, f16)
-      outs(%0 : tensor<2x10x4096x64xf16>) -> tensor<2x10x4096x64xf16>
+      outs(%0 : tensor<2x10x4096x64xf16>) {
+                      ^bb0(%score: f32):
+                        iree_linalg_ext.yield %score: f32
+                     } -> tensor<2x10x4096x64xf16>
   %2 = linalg.generic {
       indexing_maps = [affine_map<(d0, d1, d2, d3) -> (d0, d1, d2, d3)>,
                        affine_map<(d0, d1, d2, d3) -> (d1, d3)>,
@@ -1694,6 +1930,8 @@ module attributes { transform.with_named_sequence } {
 //       CHECK:     %[[EMPTY_SLICE:.+]] = tensor.extract_slice %[[EMPTY]]
 //       CHECK:     %[[ATTENTION_SLICE:.+]] = iree_linalg_ext.attention
 //  CHECK-SAME:         outs(%[[EMPTY_SLICE]] :
+// CHECK:                ^[[BLOCK:.+]](%[[SCORE:.+]]: f32):
+// CHECK:                  iree_linalg_ext.yield %[[SCORE]] : f32
 //       CHECK:     %[[OUTS_SLICE:.+]] = tensor.extract_slice %[[OUTS]]
 //       CHECK:     %[[BIAS_SLICE:.+]] = linalg.generic
 //  CHECK-SAME:         ins(%[[ATTENTION_SLICE]],
@@ -1706,6 +1944,7 @@ module attributes { transform.with_named_sequence } {
 #mapQ = affine_map<(batch, m, k1, k2, n) -> (batch, m, k1)>
 #mapK = affine_map<(batch, m, k1, k2, n) -> (batch, k2, k1)>
 #mapV = affine_map<(batch, m, k1, k2, n) -> (batch, k2, n)>
+#mapS = affine_map<(batch, m, k1, k2, n) -> ()>
 #mapO = affine_map<(batch, m, k1, k2, n) -> (batch, m, n)>
 #mapR = affine_map<(batch, m, k1, k2, n) -> (batch, m)>
 
@@ -1723,9 +1962,12 @@ func.func @online_attention(%query: tensor<192x1024x64xf32>, %key: tensor<192x10
   %sum_fill = linalg.fill ins(%sum_ident : f32) outs(%row_red_empty : tensor<192x1024xf32>) -> tensor<192x1024xf32>
 
   %out:3 = iree_linalg_ext.online_attention
-        { indexing_maps = [#mapQ, #mapK, #mapV, #mapO, #mapR, #mapR] }
+        { indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO, #mapR, #mapR] }
         ins(%query, %key, %value, %scale : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32)
-        outs(%output_fill, %acc_fill, %sum_fill : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>)
+        outs(%output_fill, %acc_fill, %sum_fill : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>) {
+                      ^bb0(%score: f32):
+                        iree_linalg_ext.yield %score: f32
+                     }
         -> tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>
 
   return %out#0 : tensor<192x1024x64xf32>
@@ -1737,8 +1979,9 @@ func.func @online_attention(%query: tensor<192x1024x64xf32>, %key: tensor<192x10
 // CHECK-DAG: #[[$MAP0:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>
 // CHECK-DAG: #[[$MAP1:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>
 // CHECK-DAG: #[[$MAP2:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>
-// CHECK-DAG: #[[$MAP3:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>
-// CHECK-DAG: #[[$MAP4:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1)>
+// CHECK-DAG: #[[$MAP3:.+]] = affine_map<(d0, d1, d2, d3, d4) -> ()>
+// CHECK-DAG: #[[$MAP4:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>
+// CHECK-DAG: #[[$MAP5:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1)>
 // CHECK-LABEL: @online_attention
 // CHECK: scf.forall (%[[IV0:.+]], %[[IV1:.+]], %[[IV2:.+]]) in (48, 8, 2)
 // CHECK-DAG:   %[[I0:.+]] = affine.apply #[[$IDXMAP0]](%[[IV0]])
@@ -1751,7 +1994,7 @@ func.func @online_attention(%query: tensor<192x1024x64xf32>, %key: tensor<192x10
 // CHECK-DAG:  %[[M:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]]] [4, 128] [1, 1] : tensor<192x1024xf32> to tensor<4x128xf32>
 // CHECK-DAG:  %[[S:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]]] [4, 128] [1, 1] : tensor<192x1024xf32> to tensor<4x128xf32>
 // CHECK-DAG: iree_linalg_ext.online_attention
-// CHECK-SAME: {indexing_maps = [#[[$MAP0]], #[[$MAP1]], #[[$MAP2]], #[[$MAP3]], #[[$MAP4]], #[[$MAP4]]]}
+// CHECK-SAME: {indexing_maps = [#[[$MAP0]], #[[$MAP1]], #[[$MAP2]], #[[$MAP3]], #[[$MAP4]], #[[$MAP5]], #[[$MAP5]]]}
 // CHECK-SAME: ins(%[[Q]], %[[K]], %[[V]], %{{.*}} : tensor<4x128x64xf32>, tensor<4x1024x64xf32>, tensor<4x1024x32xf32>, f32)
 // CHECK-SAME: outs(%[[O]], %[[M]], %[[S]] : tensor<4x128x32xf32>, tensor<4x128xf32>, tensor<4x128xf32>)
 // CHECK: scf.forall.in_parallel
@@ -1763,3 +2006,411 @@ module attributes { transform.with_named_sequence } {
     transform.yield
   }
 }
+
+// -----
+
+#mapQ = affine_map<(batch, m, k1, k2, n) -> (batch, m, k1)>
+#mapK = affine_map<(batch, m, k1, k2, n) -> (batch, k2, k1)>
+#mapV = affine_map<(batch, m, k1, k2, n) -> (batch, k2, n)>
+#mapS = affine_map<(batch, m, k1, k2, n) -> ()>
+#mapM = affine_map<(batch, m, k1, k2, n) -> (batch, m, k2)>
+#mapO = affine_map<(batch, m, k1, k2, n) -> (batch, m, n)>
+#mapR = affine_map<(batch, m, k1, k2, n) -> (batch, m)>
+
+func.func @online_attention_float_mask(%query: tensor<192x1024x64xf32>,
+                            %key: tensor<192x1024x64xf32>,
+                            %value: tensor<192x1024x64xf32>,
+                            %mask: tensor<192x1024x1024xf32>)
+                            -> tensor<192x1024x64xf32> {
+  %scale = arith.constant 1.0 : f32
+
+  %output_empty = tensor.empty() : tensor<192x1024x64xf32>
+  %row_red_empty = tensor.empty() : tensor<192x1024xf32>
+
+  %sum_ident = arith.constant 0.000000e+00 : f32
+  %max_ident = arith.constant -3.40282347E+38 : f32
+
+  %output_fill = linalg.fill ins(%sum_ident : f32) outs(%output_empty : tensor<192x1024x64xf32>) -> tensor<192x1024x64xf32>
+  %acc_fill = linalg.fill ins(%max_ident : f32) outs(%row_red_empty : tensor<192x1024xf32>) -> tensor<192x1024xf32>
+  %sum_fill = linalg.fill ins(%sum_ident : f32) outs(%row_red_empty : tensor<192x1024xf32>) -> tensor<192x1024xf32>
+
+  // Adjust the operation to correctly handle the mask
+  %out:3 = iree_linalg_ext.online_attention
+        { indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapM, #mapO, #mapR, #mapR] }
+        ins(%query, %key, %value, %scale, %mask : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32, tensor<192x1024x1024xf32>)
+        outs(%output_fill, %acc_fill, %sum_fill : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>) {
+                      ^bb0(%score: f32):
+                        iree_linalg_ext.yield %score: f32
+                     }
+        -> tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>
+
+  return %out#0 : tensor<192x1024x64xf32>
+}
+
+// CHECK-DAG: #[[$IDXMAP0:.+]] = affine_map<(d0) -> (d0 * 4)>
+// CHECK-DAG: #[[$IDXMAP1:.+]] = affine_map<(d0) -> (d0 * 128)>
+// CHECK-DAG: #[[$IDXMAP2:.+]] = affine_map<(d0) -> (d0 * 32)>
+// CHECK-DAG: #[[$MAP0:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>
+// CHECK-DAG: #[[$MAP1:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>
+// CHECK-DAG: #[[$MAP2:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>
+// CHECK-DAG: #[[$MAP3:.+]] = affine_map<(d0, d1, d2, d3, d4) -> ()>
+// CHECK-DAG: #[[$MAP4:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d3)>
+// CHECK-DAG: #[[$MAP5:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>
+// CHECK-DAG: #[[$MAP6:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1)>
+// CHECK-LABEL: @online_attention_float_mask
+// CHECK: scf.forall (%[[IV0:.+]], %[[IV1:.+]], %[[IV2:.+]]) in (48, 8, 2)
+// CHECK-DAG:   %[[I0:.+]] = affine.apply #[[$IDXMAP0]](%[[IV0]])
+// CHECK-DAG:   %[[I1:.+]] = affine.apply #[[$IDXMAP1]](%[[IV1]])
+// CHECK-DAG:   %[[I2:.+]] = affine.apply #[[$IDXMAP2]](%[[IV2]])
+// CHECK-DAG:  %[[Q:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]], 0] [4, 128, 64] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<4x128x64xf32>
+// CHECK-DAG:  %[[K:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], 0, 0] [4, 1024, 64] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<4x1024x64xf32>
+// CHECK-DAG:  %[[V:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], 0, %[[I2]]] [4, 1024, 32] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<4x1024x32xf32>
+// CHECK-DAG:  %[[MASK:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]], 0] [4, 128, 1024] [1, 1, 1] : tensor<192x1024x1024xf32> to tensor<4x128x1024xf32>
+// CHECK-DAG:  %[[O:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]], %[[I2]]] [4, 128, 32] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<4x128x32xf32>
+// CHECK-DAG:  %[[M:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]]] [4, 128] [1, 1] : tensor<192x1024xf32> to tensor<4x128xf32>
+// CHECK-DAG:  %[[S:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]]] [4, 128] [1, 1] : tensor<192x1024xf32> to tensor<4x128xf32>
+// CHECK-DAG: iree_linalg_ext.online_attention
+// CHECK-SAME: {indexing_maps = [#[[$MAP0]], #[[$MAP1]], #[[$MAP2]], #[[$MAP3]], #[[$MAP4]], #[[$MAP5]], #[[$MAP6]], #[[$MAP6]]]}
+// CHECK-SAME: ins(%[[Q]], %[[K]], %[[V]], %{{.*}}, %[[MASK]] : tensor<4x128x64xf32>, tensor<4x1024x64xf32>, tensor<4x1024x32xf32>, f32, tensor<4x128x1024xf32>)
+// CHECK-SAME: outs(%[[O]], %[[M]], %[[S]] : tensor<4x128x32xf32>, tensor<4x128xf32>, tensor<4x128xf32>)
+// CHECK: scf.forall.in_parallel
+
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["iree_linalg_ext.online_attention"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled_att, %grid = transform.structured.tile_using_forall %0 tile_sizes [4, 128, 0, 0, 32] : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+
+// -----
+
+#mapQ = affine_map<(batch, m, k1, k2, n) -> (batch, m, k1)>
+#mapK = affine_map<(batch, m, k1, k2, n) -> (batch, k2, k1)>
+#mapV = affine_map<(batch, m, k1, k2, n) -> (batch, k2, n)>
+#mapS = affine_map<(batch, m, k1, k2, n) -> ()>
+#mapM = affine_map<(batch, m, k1, k2, n) -> (batch, m, k2)>
+#mapO = affine_map<(batch, m, k1, k2, n) -> (batch, m, n)>
+#mapR = affine_map<(batch, m, k1, k2, n) -> (batch, m)>
+
+func.func @online_attention_bool_mask(%query: tensor<192x1024x64xf32>,
+                            %key: tensor<192x1024x64xf32>,
+                            %value: tensor<192x1024x64xf32>,
+                            %mask: tensor<192x1024x1024xi1>)
+                            -> tensor<192x1024x64xf32> {
+  %scale = arith.constant 1.0 : f32
+
+  %output_empty = tensor.empty() : tensor<192x1024x64xf32>
+  %row_red_empty = tensor.empty() : tensor<192x1024xf32>
+
+  %sum_ident = arith.constant 0.000000e+00 : f32
+  %max_ident = arith.constant -3.40282347E+38 : f32
+
+  %output_fill = linalg.fill ins(%sum_ident : f32) outs(%output_empty : tensor<192x1024x64xf32>) -> tensor<192x1024x64xf32>
+  %acc_fill = linalg.fill ins(%max_ident : f32) outs(%row_red_empty : tensor<192x1024xf32>) -> tensor<192x1024xf32>
+  %sum_fill = linalg.fill ins(%sum_ident : f32) outs(%row_red_empty : tensor<192x1024xf32>) -> tensor<192x1024xf32>
+
+  // Adjust the operation to correctly handle the mask
+  %out:3 = iree_linalg_ext.online_attention
+        { indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapM, #mapO, #mapR, #mapR] }
+        ins(%query, %key, %value, %scale, %mask : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32, tensor<192x1024x1024xi1>)
+        outs(%output_fill, %acc_fill, %sum_fill : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>) {
+                      ^bb0(%score: f32):
+                        iree_linalg_ext.yield %score: f32
+                     }
+        -> tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>
+
+  return %out#0 : tensor<192x1024x64xf32>
+}
+
+
+// CHECK-DAG: #[[$IDXMAP0:.+]] = affine_map<(d0) -> (d0 * 4)>
+// CHECK-DAG: #[[$IDXMAP1:.+]] = affine_map<(d0) -> (d0 * 128)>
+// CHECK-DAG: #[[$IDXMAP2:.+]] = affine_map<(d0) -> (d0 * 32)>
+// CHECK-DAG: #[[$MAP0:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>
+// CHECK-DAG: #[[$MAP1:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>
+// CHECK-DAG: #[[$MAP2:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>
+// CHECK-DAG: #[[$MAP3:.+]] = affine_map<(d0, d1, d2, d3, d4) -> ()>
+// CHECK-DAG: #[[$MAP4:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d3)>
+// CHECK-DAG: #[[$MAP5:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>
+// CHECK-DAG: #[[$MAP6:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1)>
+// CHECK-LABEL: @online_attention_bool_mask
+// CHECK: scf.forall (%[[IV0:.+]], %[[IV1:.+]], %[[IV2:.+]]) in (48, 8, 2)
+// CHECK-DAG:   %[[I0:.+]] = affine.apply #[[$IDXMAP0]](%[[IV0]])
+// CHECK-DAG:   %[[I1:.+]] = affine.apply #[[$IDXMAP1]](%[[IV1]])
+// CHECK-DAG:   %[[I2:.+]] = affine.apply #[[$IDXMAP2]](%[[IV2]])
+// CHECK-DAG:  %[[Q:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]], 0] [4, 128, 64] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<4x128x64xf32>
+// CHECK-DAG:  %[[K:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], 0, 0] [4, 1024, 64] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<4x1024x64xf32>
+// CHECK-DAG:  %[[V:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], 0, %[[I2]]] [4, 1024, 32] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<4x1024x32xf32>
+// CHECK-DAG:  %[[MASK:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]], 0] [4, 128, 1024] [1, 1, 1] : tensor<192x1024x1024xi1> to tensor<4x128x1024xi1>
+// CHECK-DAG:  %[[O:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]], %[[I2]]] [4, 128, 32] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<4x128x32xf32>
+// CHECK-DAG:  %[[M:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]]] [4, 128] [1, 1] : tensor<192x1024xf32> to tensor<4x128xf32>
+// CHECK-DAG:  %[[S:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]]] [4, 128] [1, 1] : tensor<192x1024xf32> to tensor<4x128xf32>
+// CHECK-DAG: iree_linalg_ext.online_attention
+// CHECK-SAME: {indexing_maps = [#[[$MAP0]], #[[$MAP1]], #[[$MAP2]], #[[$MAP3]], #[[$MAP4]], #[[$MAP5]], #[[$MAP6]], #[[$MAP6]]]}
+// CHECK-SAME: ins(%[[Q]], %[[K]], %[[V]], %{{.*}}, %[[MASK]] : tensor<4x128x64xf32>, tensor<4x1024x64xf32>, tensor<4x1024x32xf32>, f32, tensor<4x128x1024xi1>)
+// CHECK-SAME: outs(%[[O]], %[[M]], %[[S]] : tensor<4x128x32xf32>, tensor<4x128xf32>, tensor<4x128xf32>)
+// CHECK: scf.forall.in_parallel
+
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["iree_linalg_ext.online_attention"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled_att, %grid = transform.structured.tile_using_forall %0 tile_sizes [4, 128, 0, 0, 32] : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+
+// -----
+
+func.func @tile_custom_op_simple(%arg0 : tensor<?x?xf32>,
+    %arg1 : tensor<?x?xf32>, %arg2 : tensor<?x?xf32>) -> tensor<?x?xf32> {
+  %0 = iree_linalg_ext.custom_op {
+      indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>,
+                       affine_map<(d0, d1, d2) -> (d2, d1)>,
+                       affine_map<(d0, d1, d2) -> (d0, d1)>],
+      iterator_types = [#iree_linalg_ext.iterator_type<parallel>,
+                        #iree_linalg_ext.iterator_type<parallel>,
+                        #iree_linalg_ext.iterator_type<reduction>]}
+      ins(%arg0, %arg1 : tensor<?x?xf32>, tensor<?x?xf32>)
+      outs(%arg2 : tensor<?x?xf32>) {
+    ^bb0(%b0 : tensor<?x?xf32>, %b1 : tensor<?x?xf32>, %b2 : tensor<?x?xf32>) :
+      %1 = linalg.matmul ins(%b0, %b1 : tensor<?x?xf32>, tensor<?x?xf32>)
+          outs(%b2 : tensor<?x?xf32>) -> tensor<?x?xf32>
+      iree_linalg_ext.yield %1 : tensor<?x?xf32>
+  } -> tensor<?x?xf32>
+  return %0 : tensor<?x?xf32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["iree_linalg_ext.custom_op"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled_att, %grid = transform.structured.tile_using_forall %0 tile_sizes [4, 128, 0] : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+//  CHECK-DAG: #[[MAP0:.+]] = affine_map<()[s0] -> (s0 ceildiv 4)>
+//  CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0] -> (s0 ceildiv 128)>
+//  CHECK-DAG: #[[MAP2:.+]] = affine_map<(d0) -> (d0 * 4)>
+//  CHECK-DAG: #[[MAP3:.+]] = affine_map<(d0) -> (d0 * 128)>
+//  CHECK-DAG: #[[MAP4:.+]] = affine_map<(d0)[s0] -> (d0 * -4 + s0, 4)>
+//  CHECK-DAG: #[[MAP5:.+]] = affine_map<(d0)[s0] -> (d0 * -128 + s0, 128)>
+//      CHECK: func @tile_custom_op_simple(
+// CHECK-SAME:     %[[ARG0:[a-zA-Z0-9]+]]: tensor<?x?xf32>
+// CHECK-SAME:     %[[ARG1:[a-zA-Z0-9]+]]: tensor<?x?xf32>
+// CHECK-SAME:     %[[ARG2:[a-zA-Z0-9]+]]: tensor<?x?xf32>
+//  CHECK-DAG:   %[[C0:.+]] = arith.constant 0
+//  CHECK-DAG:   %[[C1:.+]] = arith.constant 1
+//  CHECK-DAG:   %[[M:.+]] = tensor.dim %[[ARG0]], %[[C0]]
+//  CHECK-DAG:   %[[K:.+]] = tensor.dim %[[ARG0]], %[[C1]]
+//  CHECK-DAG:   %[[N:.+]] = tensor.dim %[[ARG1]], %[[C1]]
+//  CHECK-DAG:   %[[UB0:.+]] = affine.apply #[[MAP0]]()[%[[M]]]
+//  CHECK-DAG:   %[[UB1:.+]] = affine.apply #[[MAP1]]()[%[[N]]]
+//      CHECK:   %[[RETURN:.+]] = scf.forall (%[[IV0:[a-zA-Z0-9]+]], %[[IV1:[a-zA-Z0-9]+]]) in (%[[UB0]], %[[UB1]])
+// CHECK-SAME:       shared_outs(%[[INIT:.+]] = %[[ARG2]])
+//  CHECK-DAG:     %[[OFFSET_M:.+]] = affine.apply #[[MAP2]](%[[IV0]])
+//  CHECK-DAG:     %[[OFFSET_N:.+]] = affine.apply #[[MAP3]](%[[IV1]])
+//  CHECK-DAG:     %[[TILESIZE_M:.+]] = affine.min #[[MAP4]](%[[IV0]])[%[[M]]]
+//  CHECK-DAG:     %[[TILESIZE_N:.+]] = affine.min #[[MAP5]](%[[IV1]])[%[[N]]]
+//  CHECK-DAG:     %[[LHS_SLICE:.+]] = tensor.extract_slice %[[ARG0]][%[[OFFSET_M]], 0] [%[[TILESIZE_M]], %[[K]]]
+//  CHECK-DAG:     %[[RHS_SLICE:.+]] = tensor.extract_slice %[[ARG1]][0, %[[OFFSET_N]]] [%[[K]], %[[TILESIZE_N]]]
+//  CHECK-DAG:     %[[INIT_SLICE:.+]] = tensor.extract_slice %[[INIT]][%[[OFFSET_M]], %[[OFFSET_N]]] [%[[TILESIZE_M]], %[[TILESIZE_N]]]
+//      CHECK:     %[[CUSTOM_OP:.+]] = iree_linalg_ext.custom_op
+// CHECK-SAME:         ins(%[[LHS_SLICE]], %[[RHS_SLICE]] :
+// CHECK-SAME:         outs(%[[INIT_SLICE]] :
+//      CHECK:     scf.forall.in_parallel
+//      CHECK:       tensor.parallel_insert_slice %[[CUSTOM_OP]] into %[[INIT]][%[[OFFSET_M]], %[[OFFSET_N]]] [%[[TILESIZE_M]], %[[TILESIZE_N]]]
+//      CHECK:   return %[[RETURN]]
+
+// -----
+
+func.func @tile_custom_op_with_symbolic_indexing_maps(%lhs0 : tensor<?x?xf32>,
+    %rhs0: tensor<?x?xf32>, %init0 : tensor<?x?xf32>,
+    %rhs1 : tensor<?x?xf32>, %init1 : tensor<?x?xf32>) -> tensor<?x?xf32> {
+  %0 = iree_linalg_ext.custom_op {
+      indexing_maps = [affine_map<(d0, d1)[s0, s1] -> (d0, s0)>,
+                       affine_map<(d0, d1)[s0, s1] -> (s0, s1)>,
+                                   affine_map<(d0, d1)[s0, s1] -> (d0, s1)>,
+                       affine_map<(d0, d1)[s0, s1] -> (s1, d1)>,
+                               affine_map<(d0, d1)[s0, s1] -> (d0, d1)>],
+      iterator_types = [#iree_linalg_ext.iterator_type<parallel>,
+                        #iree_linalg_ext.iterator_type<parallel>]}
+      ins(%lhs0, %rhs0, %init0, %rhs1 : tensor<?x?xf32>, tensor<?x?xf32>, tensor<?x?xf32>, tensor<?x?xf32>)
+      outs(%init1 : tensor<?x?xf32>) {
+    ^bb0(%b0 : tensor<?x?xf32>, %b1 : tensor<?x?xf32>, %b2 : tensor<?x?xf32>, %b3 : tensor<?x?xf32>, %b4 : tensor<?x?xf32>) :
+      %1 = linalg.matmul ins(%b0, %b1 : tensor<?x?xf32>, tensor<?x?xf32>)
+          outs(%b2 : tensor<?x?xf32>) -> tensor<?x?xf32>
+      %2 = linalg.matmul ins(%1, %b3 : tensor<?x?xf32>, tensor<?x?xf32>)
+          outs(%b4 : tensor<?x?xf32>) -> tensor<?x?xf32>
+      iree_linalg_ext.yield %2 : tensor<?x?xf32>
+  } -> tensor<?x?xf32>
+  return %0 : tensor<?x?xf32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["iree_linalg_ext.custom_op"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled_att, %grid = transform.structured.tile_using_forall %0 tile_sizes [4, 128] : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+//  CHECK-DAG: #[[MAP0:.+]] = affine_map<()[s0] -> (s0 ceildiv 4)>
+//  CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0] -> (s0 ceildiv 128)>
+//  CHECK-DAG: #[[MAP2:.+]] = affine_map<(d0) -> (d0 * 4)>
+//  CHECK-DAG: #[[MAP3:.+]] = affine_map<(d0) -> (d0 * 128)>
+//  CHECK-DAG: #[[MAP4:.+]] = affine_map<(d0)[s0] -> (d0 * -4 + s0, 4)>
+//  CHECK-DAG: #[[MAP5:.+]] = affine_map<(d0)[s0] -> (d0 * -128 + s0, 128)>
+//      CHECK: func @tile_custom_op_with_symbolic_indexing_maps(
+// CHECK-SAME:     %[[ARG0:[a-zA-Z0-9]+]]: tensor<?x?xf32>
+// CHECK-SAME:     %[[ARG1:[a-zA-Z0-9]+]]: tensor<?x?xf32>
+// CHECK-SAME:     %[[ARG2:[a-zA-Z0-9]+]]: tensor<?x?xf32>
+// CHECK-SAME:     %[[ARG3:[a-zA-Z0-9]+]]: tensor<?x?xf32>
+// CHECK-SAME:     %[[ARG4:[a-zA-Z0-9]+]]: tensor<?x?xf32>
+//  CHECK-DAG:   %[[C0:.+]] = arith.constant 0
+//  CHECK-DAG:   %[[C1:.+]] = arith.constant 1
+//  CHECK-DAG:   %[[M0:.+]] = tensor.dim %[[ARG0]], %[[C0]]
+//  CHECK-DAG:   %[[N1:.+]] = tensor.dim %[[ARG3]], %[[C1]]
+//  CHECK-DAG:   %[[UB0:.+]] = affine.apply #[[MAP0]]()[%[[M0]]]
+//  CHECK-DAG:   %[[UB1:.+]] = affine.apply #[[MAP1]]()[%[[N1]]]
+//      CHECK:   %[[RETURN:.+]] = scf.forall (%[[IV0:[a-zA-Z0-9]+]], %[[IV1:[a-zA-Z0-9]+]]) in (%[[UB0]], %[[UB1]])
+// CHECK-SAME:       shared_outs(%[[INIT:.+]] = %[[ARG4]])
+//  CHECK-DAG:     %[[OFFSET_M:.+]] = affine.apply #[[MAP2]](%[[IV0]])
+//  CHECK-DAG:     %[[OFFSET_N:.+]] = affine.apply #[[MAP3]](%[[IV1]])
+//  CHECK-DAG:     %[[TILESIZE_M:.+]] = affine.min #[[MAP4]](%[[IV0]])[%[[M0]]]
+//  CHECK-DAG:     %[[TILESIZE_N:.+]] = affine.min #[[MAP5]](%[[IV1]])[%[[N1]]]
+//  CHECK-DAG:     %[[K0:.+]] = tensor.dim %[[ARG0]], %[[C1]]
+//  CHECK-DAG:     %[[K0_1:.+]] = tensor.dim %[[ARG1]], %[[C0]]
+//  CHECK-DAG:     %[[N0:.+]] = tensor.dim %[[ARG1]], %[[C1]]
+//  CHECK-DAG:     %[[N0_1:.+]] = tensor.dim %[[ARG2]], %[[C1]]
+//  CHECK-DAG:     %[[K1:.+]] = tensor.dim %[[ARG3]], %[[C0]]
+//  CHECK-DAG:     %[[ARG0_SLICE:.+]] = tensor.extract_slice %[[ARG0]][%[[OFFSET_M]], 0] [%[[TILESIZE_M]], %[[K0]]]
+//  CHECK-DAG:     %[[ARG1_SLICE:.+]] = tensor.extract_slice %[[ARG1]][0, 0] [%[[K0_1]], %[[N0]]]
+//  CHECK-DAG:     %[[ARG2_SLICE:.+]] = tensor.extract_slice %[[ARG2]][%[[OFFSET_M]], 0] [%[[TILESIZE_M]], %[[N0_1]]]
+//  CHECK-DAG:     %[[ARG3_SLICE:.+]] = tensor.extract_slice %[[ARG3]][0, %[[OFFSET_N]]] [%[[K1]], %[[TILESIZE_N]]]
+//  CHECK-DAG:     %[[INIT_SLICE:.+]] = tensor.extract_slice %[[INIT]][%[[OFFSET_M]], %[[OFFSET_N]]] [%[[TILESIZE_M]], %[[TILESIZE_N]]]
+//      CHECK:     %[[TILED_OP:.+]] = iree_linalg_ext.custom_op
+// CHECK-SAME:         ins(%[[ARG0_SLICE]], %[[ARG1_SLICE]], %[[ARG2_SLICE]], %[[ARG3_SLICE]] :
+// CHECK-SAME:         outs(%[[INIT_SLICE]] :
+//      CHECK:     scf.forall.in_parallel
+//      CHECK:       tensor.parallel_insert_slice %[[TILED_OP]] into %[[INIT]][%[[OFFSET_M]], %[[OFFSET_N]]] [%[[TILESIZE_M]], %[[TILESIZE_N]]]
+//      CHECK:   return %[[RETURN]]
+
+// -----
+
+func.func @custom_op_do_not_tile_empty_map(%arg0 : tensor<?x?xf32>,
+    %arg1 : tensor<?x?xf32>, %arg2 : tensor<?x?xf32>) -> tensor<?x?xf32> {
+  %0 = iree_linalg_ext.custom_op {
+      indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>,
+                       affine_map<() -> ()>,
+                       affine_map<(d0, d1, d2) -> (d0, d1)>],
+      iterator_types = [#iree_linalg_ext.iterator_type<parallel>,
+                        #iree_linalg_ext.iterator_type<parallel>,
+                        #iree_linalg_ext.iterator_type<reduction>]}
+      ins(%arg0, %arg1 : tensor<?x?xf32>, tensor<?x?xf32>) outs(%arg2 : tensor<?x?xf32>) {
+    ^bb0(%b0 : tensor<?x?xf32>, %b1 : tensor<?x?xf32>, %b2 : tensor<?x?xf32>):
+      %1 = linalg.matmul ins(%b0, %b1 : tensor<?x?xf32>, tensor<?x?xf32>)
+          outs(%b2 : tensor<?x?xf32>) -> tensor<?x?xf32>
+      iree_linalg_ext.yield %1 : tensor<?x?xf32>
+  } -> tensor<?x?xf32>
+  return %0 : tensor<?x?xf32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["iree_linalg_ext.custom_op"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled_att, %grid = transform.structured.tile_using_forall %0 tile_sizes [4, 128] : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+// CHECK-LABEL: func @custom_op_do_not_tile_empty_map(
+//  CHECK-SAME:     %[[ARG0:[a-zA-Z0-9]+]]: tensor<?x?xf32>, %[[ARG1:[a-zA-Z0-9]+]]: tensor<?x?xf32>,
+//       CHECK:   scf.forall
+//       CHECK:     %[[SLICE:.+]] = tensor.extract_slice %[[ARG0]]
+//       CHECK:     iree_linalg_ext.custom_op
+//  CHECK-SAME:         ins(%[[SLICE]], %[[ARG1]]
+
+// -----
+
+func.func @custom_op_tile_scalar_args(%arg0 : tensor<?x?xf32>,
+    %arg1 : f32, %arg2 : tensor<?x?xf32>) -> tensor<?x?xf32> {
+  %0 = iree_linalg_ext.custom_op {
+      indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>,
+                       affine_map<(d0, d1, d2) -> ()>,
+                       affine_map<(d0, d1, d2) -> (d0, d1)>],
+      iterator_types = [#iree_linalg_ext.iterator_type<parallel>,
+                        #iree_linalg_ext.iterator_type<parallel>,
+                        #iree_linalg_ext.iterator_type<reduction>]}
+      ins(%arg0, %arg1 : tensor<?x?xf32>, f32) outs(%arg2 : tensor<?x?xf32>) {
+    ^bb0(%b0 : tensor<?x?xf32>, %b1 : f32, %b2 : tensor<?x?xf32>):
+      %1 = linalg.generic {
+          iterator_types = ["parallel", "parallel", "reduction"],
+          indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>,
+                           affine_map<(d0, d1, d2) -> ()>,
+                           affine_map<(d0, d1, d2) -> (d0, d1)>]}
+          ins(%b0, %b1 : tensor<?x?xf32>, f32)
+          outs(%b2 : tensor<?x?xf32>) {
+        ^bb0(%bb0: f32, %bb1: f32, %bb2: f32):
+          %2 = arith.mulf %bb0, %bb1 : f32
+          %3 = arith.addf %2, %bb2 : f32
+          linalg.yield %3 : f32
+      } -> tensor<?x?xf32>
+      iree_linalg_ext.yield %1 : tensor<?x?xf32>
+  } -> tensor<?x?xf32>
+  return %0 : tensor<?x?xf32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["iree_linalg_ext.custom_op"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled_att, %grid = transform.structured.tile_using_forall %0 tile_sizes [4, 128] : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+// CHECK-LABEL: func @custom_op_tile_scalar_args(
+//  CHECK-SAME:     %[[ARG0:[a-zA-Z0-9]+]]: tensor<?x?xf32>, %[[ARG1:[a-zA-Z0-9]+]]: f32,
+//       CHECK:   scf.forall
+//       CHECK:     %[[SLICE:.+]] = tensor.extract_slice %[[ARG0]]
+//       CHECK:     iree_linalg_ext.custom_op
+//  CHECK-SAME:         ins(%[[SLICE]], %[[ARG1]]
+
+// -----
+
+func.func @custom_op_index_handling(%arg0 : tensor<?x?xindex>,
+    %arg2 : tensor<?x?xindex>) -> tensor<?x?xindex> {
+  %0 = iree_linalg_ext.custom_op {
+      indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>,
+                       affine_map<(d0, d1, d2) -> (d0, d1)>],
+      iterator_types = [#iree_linalg_ext.iterator_type<parallel>,
+                        #iree_linalg_ext.iterator_type<parallel>,
+                        #iree_linalg_ext.iterator_type<reduction>]}
+      ins(%arg0 : tensor<?x?xindex>) outs(%arg2 : tensor<?x?xindex>) {
+    ^bb0(%b0 : tensor<?x?xindex>, %b2 : tensor<?x?xindex>):
+      %1 = iree_linalg_ext.index 0 : index
+      %2 = linalg.generic {
+          iterator_types = ["parallel", "parallel", "reduction"],
+          indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>,
+                           affine_map<(d0, d1, d2) -> ()>,
+                           affine_map<(d0, d1, d2) -> (d0, d1)>]}
+          ins(%b0, %1 : tensor<?x?xindex>, index)
+          outs(%b2 : tensor<?x?xindex>) {
+        ^bb0(%bb0: index, %bb1: index, %bb2: index):
+          %2 = arith.muli %bb0, %bb1 : index
+          %3 = arith.addi %2, %bb2 : index
+          linalg.yield %3 : index
+      } -> tensor<?x?xindex>
+      iree_linalg_ext.yield %2 : tensor<?x?xindex>
+  } -> tensor<?x?xindex>
+  return %0 : tensor<?x?xindex>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %0 = transform.structured.match ops{["iree_linalg_ext.custom_op"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled_att, %grid = transform.structured.tile_using_forall %0 tile_sizes [4, 128] : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+//      CHECK: #[[MAP:.+]] = affine_map<(d0, d1) -> (d0 + d1 * 4)>
+//      CHECK: func @custom_op_index_handling(%[[ARG0:[a-zA-Z0-9]+]]: tensor<?x?xindex>,
+//      CHECK:   scf.forall (%[[IV:[a-zA-Z0-9]+]],
+//      CHECK:     %[[SLICE:.+]] = tensor.extract_slice %[[ARG0]]
+//      CHECK:     iree_linalg_ext.custom_op
+// CHECK-SAME:         ins(%[[SLICE]]
+//      CHECK:       %[[NEW_INDEX:.+]] = iree_linalg_ext.index 0 : index
+//      CHECK:       %[[INDEX:.+]] = affine.apply #[[MAP]](%[[NEW_INDEX]], %[[IV]])
+//      CHECK:       linalg.generic
+// CHECK-SAME:           ins(%{{.+}}, %[[INDEX]] :

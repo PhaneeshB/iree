@@ -77,10 +77,6 @@ static void* iree_thread_start_routine(void* param) {
   thread->entry = NULL;
   thread->entry_arg = NULL;
 
-  // Release our ownership of the thread handle. If the creating thread doesn't
-  // want it this will free the memory and fully detach the thread.
-  iree_thread_release(thread);
-
   // Call the user thread entry point function.
   // Note that this can be a tail-call which saves a stack frame in all threads
   // (which is really just to make call stacks in debuggers much cleaner).
@@ -108,9 +104,8 @@ iree_status_t iree_thread_create(iree_thread_entry_t entry, void* entry_arg,
   thread->entry_arg = entry_arg;
   iree_strncpy_s(thread->name, IREE_ARRAYSIZE(thread->name), params.name.data,
                  iree_min(params.name.size, IREE_ARRAYSIZE(thread->name) - 1));
-  iree_atomic_store_int32(&thread->is_suspended,
-                          params.create_suspended ? 1 : 0,
-                          iree_memory_order_relaxed);
+  iree_atomic_store(&thread->is_suspended, params.create_suspended ? 1 : 0,
+                    iree_memory_order_relaxed);
 
   pthread_attr_t thread_attr;
   pthread_attr_init(&thread_attr);
@@ -128,9 +123,6 @@ iree_status_t iree_thread_create(iree_thread_entry_t entry, void* entry_arg,
   }
   pthread_attr_set_qos_class_np(&thread_attr, qos_class, 0);
 
-  // Retain the thread for the thread itself; this way if the caller immediately
-  // releases the iree_thread_t handle the thread won't explode.
-  iree_thread_retain(thread);
   *out_thread = thread;
 
   // Create the thread either suspended or running as the user requested.
@@ -148,7 +140,6 @@ iree_status_t iree_thread_create(iree_thread_entry_t entry, void* entry_arg,
   }
   pthread_attr_destroy(&thread_attr);
   if (rc != 0) {
-    iree_thread_release(thread);  // for self
     iree_thread_release(thread);  // for caller
     *out_thread = NULL;
     IREE_TRACE_ZONE_END(z0);
@@ -247,7 +238,7 @@ void iree_thread_resume(iree_thread_t* thread) {
   // always balance suspend/resume or else we'll mess with any
   // debuggers/profilers that may be suspending threads for their own uses.
   int32_t expected = 1;
-  if (iree_atomic_compare_exchange_strong_int32(
+  if (iree_atomic_compare_exchange_strong(
           &thread->is_suspended, &expected, 0, iree_memory_order_acq_rel,
           iree_memory_order_relaxed /* expected is unused */)) {
     thread_resume(thread->mach_port);

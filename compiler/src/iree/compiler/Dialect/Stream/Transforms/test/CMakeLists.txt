@@ -16,6 +16,7 @@ iree_lit_test_suite(
   SRCS
     "annotate_affinities.mlir"
     "annotate_dispatch_arguments.mlir"
+    "annotate_dispatch_assumptions.mlir"
     "convert_to_stream.mlir"
     "dump_statistics.mlir"
     "elide_async_copies.mlir"
@@ -26,6 +27,7 @@ iree_lit_test_suite(
     "encode_device_tensors_packing.mlir"
     "encode_host_tensors.mlir"
     "encode_host_tensors_packing.mlir"
+    "encode_host_tensors_packing_i1.mlir"
     "fold_globals.mlir"
     "fold_uniform_operands.mlir"
     "fuse_dispatch_bindings.mlir"

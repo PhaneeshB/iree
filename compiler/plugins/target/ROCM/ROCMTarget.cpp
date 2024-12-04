@@ -8,6 +8,8 @@
 
 #include <cstdint>
 
+#include "compiler/plugins/target/ROCM/builtins/ukernel/iree_uk_amdgpu_bitcode.h"
+#include "iree/compiler/Codegen/Common/Passes.h"
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenDialect.h"
 #include "iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUAttrs.h"
 #include "iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUDialect.h"
@@ -21,9 +23,10 @@
 #include "iree/compiler/Dialect/HAL/Utils/ExecutableDebugInfoUtils.h"
 #include "iree/compiler/Dialect/HAL/Utils/LLVMLinkerUtils.h"
 #include "iree/compiler/PluginAPI/Client.h"
+#include "iree/compiler/Utils/EmbeddedDataDirectory.h"
 #include "iree/compiler/Utils/FlatbufferUtils.h"
-#include "iree/compiler/Utils/ModuleUtils.h"
 #include "iree/compiler/Utils/ToolUtils.h"
+#include "iree/schemas/amdgpu_executable_def_builder.h"
 #include "iree/schemas/hip_executable_def_builder.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -34,19 +37,16 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/Cloning.h"
-#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
-#include "mlir/Dialect/AMDGPU/Utils/Chipset.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/DialectResourceBlobManager.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
@@ -58,13 +58,22 @@ namespace mlir::iree_compiler::IREE::HAL {
 
 namespace {
 
-struct ROCmOptions {
-  std::string target = "gfx908";
+// TODO(#18792): rename flags back to iree-rocm- as they are not HIP-specific.
+// Only iree-hip-legacy-sync applies uniquely to HIP.
+struct ROCMOptions {
+  std::string target = "";
   std::string targetFeatures = "";
   std::string bitcodeDirectory = getDefaultBitcodeDirectory();
   int wavesPerEu = 0;
   std::string enableROCMUkernels = "none";
   bool legacySync = true;
+  bool slpVectorization = true;
+  bool globalISel = false;
+
+  /// List of LLVM opt pass pluggins to be loaded during GPU code
+  /// generation. The pluggins are paths to dynamic libraries that
+  /// are added to the LLVM pass manager.
+  SmallVector<std::string> passPlugins;
 
   void bindOptions(OptionsBinder &binder) {
     using namespace llvm;
@@ -100,9 +109,26 @@ struct ROCmOptions {
     binder.opt<bool>("iree-hip-legacy-sync", legacySync, cl::cat(category),
                      cl::desc("Enables 'legacy-sync' mode, which is required "
                               "for inline execution."));
+    binder.list<std::string>(
+        "iree-hip-pass-plugin-path", passPlugins,
+        cl::desc("LLVM pass plugins are out of tree libraries that implement "
+                 "LLVM opt passes. The library paths passed in this flag are "
+                 "to be passed to the target backend compiler during HIP "
+                 "executable serialization"),
+        cl::ZeroOrMore, cl::cat(category));
+    binder.opt<bool>("iree-hip-llvm-slp-vec", slpVectorization,
+                     cl::cat(category),
+                     cl::desc("Enable slp vectorization in llvm opt."));
+    binder.opt<bool>("iree-hip-llvm-global-isel", globalISel, cl::cat(category),
+                     cl::desc("Enable global instruction selection in llvm."));
   }
 
   LogicalResult verify(mlir::Builder &builder) const {
+    if (target.empty()) {
+      return emitError(builder.getUnknownLoc())
+             << "HIP target not set; did you forget to pass "
+                "'--iree-hip-target'?";
+    }
     if (GPU::normalizeHIPTarget(target).empty()) {
       return emitError(builder.getUnknownLoc(), "Unknown HIP target '")
              << target << "'";
@@ -135,66 +161,15 @@ private:
   }
 };
 
-// Extracts the amdgpu chipset version from the chip architecture in the
-// executable target attribute.
-static FailureOr<amdgpu::Chipset>
-getChipsetVersion(ExecutableTargetAttr targetAttr) {
-  IREE::GPU::TargetAttr gpuTarget = getGPUTargetAttr(targetAttr);
-  if (!gpuTarget)
-    return failure();
-
-  return amdgpu::Chipset::parse(gpuTarget.getArch());
-}
-
-// Set attributes on `funcOp` in order to use upstream's translation of
-// ROCDL dialect attributes to LLVM. Primarily this is `rocdl.kernel`
-// (sets the calling convention and workgroup size uniformity) but this will
-// also set both forms of workgroup size metadata from `exportOp` (if it is set)
-// and will set the waves_per_eq flag where relevant. Finally, it will mark
-// kernel arguments `inreg` to enable argument preloading on supported
-// architectures.
-static void annotateKernelForTranslation(LLVM::LLVMFuncOp funcOp,
-                                         ExecutableExportOp exportOp,
-                                         ExecutableTargetAttr targetAttr,
-                                         OpBuilder &builder) {
-  auto *rocdlDialect =
-      funcOp.getContext()->getLoadedDialect<ROCDL::ROCDLDialect>();
-  UnitAttr unitAttr = builder.getUnitAttr();
-  rocdlDialect->getKernelAttrHelper().setAttr(funcOp, unitAttr);
-  std::optional<ArrayAttr> workgroupSizeAttr = exportOp.getWorkgroupSize();
-  if (workgroupSizeAttr && workgroupSizeAttr->size() <= 3) {
-    std::array<int32_t, 3> wgSizes;
-    int32_t flatWgSize = 1;
-    for (auto [value, attr] : llvm::zip_equal(
-             wgSizes, workgroupSizeAttr->getAsRange<IntegerAttr>())) {
-      value = attr.getInt();
-      flatWgSize *= value;
+// Returns the ABI or an empty string if unspecified.
+static StringRef getABI(IREE::HAL::ExecutableTargetAttr targetAttr) {
+  if (targetAttr) {
+    if (auto config = targetAttr.getConfiguration()) {
+      auto abiAttr = targetAttr.getConfiguration().getAs<StringAttr>("abi");
+      return abiAttr ? abiAttr.getValue() : "";
     }
-    rocdlDialect->getReqdWorkGroupSizeAttrHelper().setAttr(
-        funcOp, builder.getDenseI32ArrayAttr(wgSizes));
-    rocdlDialect->getFlatWorkGroupSizeAttrHelper().setAttr(
-        funcOp,
-        builder.getStringAttr(Twine(flatWgSize) + "," + Twine(flatWgSize)));
   }
-
-  if (std::optional<IntegerAttr> attr =
-          getConfigIntegerAttr(targetAttr, "waves_per_eu")) {
-    rocdlDialect->getWavesPerEuAttrHelper().setAttr(funcOp, *attr);
-  }
-
-  // Kernel argument preloading is only supported on gfx940 and newer targets
-  // from the CDNA family. This is enabled using the `inreg` function argument
-  // attribute.
-  FailureOr<amdgpu::Chipset> chipset = getChipsetVersion(targetAttr);
-  if (failed(chipset))
-    return;
-  if (chipset->majorVersion != 9 && chipset->minorVersion < 0x40)
-    return;
-
-  auto inRegAttrName =
-      builder.getStringAttr(LLVM::LLVMDialect::getInRegAttrName());
-  for (unsigned i = 0, e = funcOp.getNumArguments(); i < e; ++i)
-    funcOp.setArgAttr(i, inRegAttrName, unitAttr);
+  return "";
 }
 
 static void dumpModuleToPath(StringRef path, StringRef baseName,
@@ -234,47 +209,12 @@ static std::string translateModuleToISA(llvm::Module &module,
   }
   return targetISA;
 }
+
 } // namespace
-
-class ROCMTargetDevice final : public TargetDevice {
-public:
-  ROCMTargetDevice(const ROCmOptions &options) : options(options) {}
-
-  IREE::HAL::DeviceTargetAttr
-  getDefaultDeviceTarget(MLIRContext *context,
-                         const TargetRegistry &targetRegistry) const override {
-    Builder b(context);
-
-    SmallVector<NamedAttribute> deviceConfigAttrs;
-    if (options.legacySync) {
-      // Indicates that the runtime HAL driver operates only in the legacy
-      // synchronous mode.
-      deviceConfigAttrs.emplace_back(b.getStringAttr("legacy_sync"),
-                                     b.getUnitAttr());
-    }
-    auto deviceConfigAttr = b.getDictionaryAttr(deviceConfigAttrs);
-
-    SmallVector<NamedAttribute> executableConfigAttrs;
-    auto executableConfigAttr = b.getDictionaryAttr(executableConfigAttrs);
-
-    // If we had multiple target environments we would generate one target attr
-    // per environment, with each setting its own environment attribute.
-    SmallVector<IREE::HAL::ExecutableTargetAttr> executableTargetAttrs;
-    targetRegistry.getTargetBackend("rocm")->getDefaultExecutableTargets(
-        context, "rocm", executableConfigAttr, executableTargetAttrs);
-
-    return IREE::HAL::DeviceTargetAttr::get(context, b.getStringAttr("hip"),
-                                            deviceConfigAttr,
-                                            executableTargetAttrs);
-  }
-
-private:
-  const ROCmOptions &options;
-};
 
 class ROCMTargetBackend final : public TargetBackend {
 public:
-  ROCMTargetBackend(const ROCmOptions &options) : options(options) {}
+  ROCMTargetBackend(const ROCMOptions &options) : options(options) {}
 
   std::string getLegacyDefaultDeviceID() const override { return "hip"; }
 
@@ -282,31 +222,43 @@ public:
       MLIRContext *context, StringRef deviceID, DictionaryAttr deviceConfigAttr,
       SmallVectorImpl<IREE::HAL::ExecutableTargetAttr> &executableTargetAttrs)
       const override {
-    if (auto target = getExecutableTarget(context))
+    if (auto target = getExecutableTarget(deviceID, context)) {
       executableTargetAttrs.push_back(target);
+    }
   }
 
   IREE::HAL::ExecutableTargetAttr
-  getExecutableTarget(MLIRContext *context) const {
+  getExecutableTarget(StringRef deviceID, MLIRContext *context) const {
     Builder b(context);
     SmallVector<NamedAttribute> configItems;
     auto addConfig = [&](StringRef name, Attribute value) {
       configItems.emplace_back(b.getStringAttr(name), value);
     };
 
-    if (failed(options.verify(b)))
+    if (failed(options.verify(b))) {
       return nullptr;
+    }
 
-    if (auto target = GPU::getHIPTargetDetails(options.target,
-                                               options.targetFeatures, context))
+    addConfig("abi", b.getStringAttr(deviceID));
+    std::string format;
+    if (deviceID == "amdgpu") {
+      format = options.target;
+    } else {
+      format = "rocm-hsaco-fb"; // legacy HIP
+    }
+
+    if (auto target = GPU::getHIPTargetDetails(
+            options.target, options.targetFeatures, context)) {
       addConfig("iree.gpu.target", target);
+    }
 
     addConfig("ukernels", b.getStringAttr(options.enableROCMUkernels));
-    if (options.wavesPerEu > 0)
+    if (options.wavesPerEu > 0) {
       addConfig("waves_per_eu", b.getI64IntegerAttr(options.wavesPerEu));
+    }
 
     return b.getAttr<IREE::HAL::ExecutableTargetAttr>(
-        b.getStringAttr("rocm"), b.getStringAttr("rocm-hsaco-fb"),
+        b.getStringAttr("rocm"), b.getStringAttr(format),
         b.getDictionaryAttr(configItems));
   }
 
@@ -317,8 +269,8 @@ public:
     registry.insert<IREE::Codegen::IREECodegenDialect>();
     registry.insert<IREE::VectorExt::IREEVectorExtDialect>();
     registry.insert<IREE::GPU::IREEGPUDialect>();
-    registry.insert<amdgpu::AMDGPUDialect>();
-    registry.insert<ROCDL::ROCDLDialect>();
+    // Configuration may load and manipulate transform dialect libraries.
+    registerTransformDialectTranslationDependentDialects(registry);
   }
 
   void
@@ -332,11 +284,17 @@ public:
     buildLLVMGPUCodegenPassPipeline(passManager, true);
   }
 
+  void buildLinkingPassPipeline(OpPassManager &passManager) override {
+    buildLLVMGPULinkingPassPipeline(passManager, "rocm");
+  }
+
   // Performs optimizations on |module| (including LTO-style whole-program
   // ones). Inspired by code section in
   // https://github.com/iree-org/iree/blob/main/compiler/plugins/target/CUDA/CUDATarget.cpp
   static void optimizeModule(llvm::Module &module,
-                             llvm::TargetMachine &targetMachine) {
+                             llvm::TargetMachine &targetMachine,
+                             ArrayRef<std::string> passPlugins,
+                             bool slpVectorization) {
     llvm::LoopAnalysisManager lam;
     llvm::FunctionAnalysisManager fam;
     llvm::CGSCCAnalysisManager cgam;
@@ -345,7 +303,7 @@ public:
     fam.registerPass([&] { return targetMachine.getTargetIRAnalysis(); });
 
     llvm::PipelineTuningOptions pto;
-    pto.SLPVectorization = false;
+    pto.SLPVectorization = slpVectorization;
 
     llvm::PassInstrumentationCallbacks pic;
 
@@ -360,6 +318,18 @@ public:
     pb.registerLoopAnalyses(lam);
     pb.crossRegisterProxies(lam, fam, cgam, mam);
 
+    for (const std::string &pluginFileName : passPlugins) {
+      llvm::Expected<llvm::PassPlugin> pp =
+          llvm::PassPlugin::Load(pluginFileName);
+      if (pp) {
+        pp->registerPassBuilderCallbacks(pb);
+      } else {
+        std::string error = "unable to load plugin " + pluginFileName + ": " +
+                            llvm::toString(pp.takeError());
+        llvm::report_fatal_error(error.c_str());
+      }
+    }
+
     llvm::OptimizationLevel ol = llvm::OptimizationLevel::O2;
 
     mpm.addPass(llvm::VerifierPass());
@@ -369,9 +339,25 @@ public:
     mpm.run(module, mam);
   }
 
-  LogicalResult serializeExecutable(const SerializationOptions &serOptions,
-                                    IREE::HAL::ExecutableVariantOp variantOp,
-                                    OpBuilder &executableBuilder) override {
+  LogicalResult
+  validateFinalizedModule(IREE::HAL::ExecutableVariantOp variantOp,
+                          llvm::Module &module) {
+    for (llvm::Function &func : module.functions()) {
+      if (func.isDeclaration() && !func.isIntrinsic() && !func.use_empty()) {
+        llvm::User *liveUser = *func.user_begin();
+        return variantOp.emitError()
+               << "found an unresolved external function '" << func.getName()
+               << "' in the final bitcode. A remaining live user is\n"
+               << llvm::formatv("{0}", *liveUser);
+      }
+    }
+    return success();
+  }
+
+  LogicalResult
+  serializeExecutable(const SerializationOptions &serializationOptions,
+                      IREE::HAL::ExecutableVariantOp variantOp,
+                      OpBuilder &executableBuilder) override {
     ModuleOp innerModuleOp = variantOp.getInnerModule();
     auto targetAttr = variantOp.getTargetAttr();
     StringRef targetArch = options.target;
@@ -391,11 +377,8 @@ public:
     // Collect all the entry point names.
     auto exportOps = llvm::to_vector_of<IREE::HAL::ExecutableExportOp>(
         variantOp.getExportOps());
-    llvm::StringMap<IREE::HAL::ExecutableExportOp> exportOpMap;
     std::optional<uint32_t> subgroupSize;
     for (IREE::HAL::ExecutableExportOp exportOp : exportOps) {
-      exportOpMap[exportOp.getSymName()] = exportOp;
-
       // TODO: put this either on the variant or propagate as a function
       // attribute instead - today this *must* be consistent across all exports
       // and it shouldn't need to be.
@@ -420,7 +403,9 @@ public:
       if (!variantOp.getObjects().has_value()) {
         return variantOp.emitOpError()
                << "no objects defined for external variant";
-      } else if (variantOp.getObjects()->getValue().size() != 1) {
+      }
+
+      if (variantOp.getObjects()->getValue().size() != 1) {
         // For now we assume there will be exactly one object file.
         // In the future we will want to perform a linking step here and ideally
         // support _also_ linking in the codegen results.
@@ -441,17 +426,6 @@ public:
       // Perform the translation in a separate context to avoid any
       // multi-threading issues.
       llvm::LLVMContext context;
-
-      // Set up attributes so upstream's conversions work right.
-      for (auto func : innerModuleOp.getOps<LLVM::LLVMFuncOp>()) {
-        // Un-exported functions are library functions or otherwise
-        // not kernels, so don't need these annotations.
-        if (!exportOpMap.contains(func.getName()))
-          continue;
-        annotateKernelForTranslation(func, exportOpMap[func.getName()],
-                                     targetAttr, executableBuilder);
-      }
-
       std::unique_ptr<llvm::Module> llvmModule =
           mlir::translateModuleToLLVMIR(innerModuleOp, context, libraryName);
       if (!llvmModule) {
@@ -470,10 +444,10 @@ public:
           for (NamedAttribute funcAttr : funcAttrs) {
             auto value = dyn_cast<StringAttr>(funcAttr.getValue());
             if (!value) {
-              return variantOp->emitError("llvm_func_attrs attribute must be "
-                                          "adictionary of strings. Attribute " +
-                                          llvm::Twine(funcAttr.getName()) +
-                                          " is not a StringAttr.");
+              return variantOp->emitError()
+                     << "llvm_func_attrs attribute must be a dictionary of "
+                        "strings. Attribute "
+                     << funcAttr.getName() << " is not a StringAttr.";
             }
             llvmFunc->addFnAttr(funcAttr.getName(), value.getValue());
           }
@@ -494,25 +468,37 @@ public:
         opt.UnsafeFPMath = false;
         opt.NoInfsFPMath = false;
         opt.NoNaNsFPMath = true;
-        std::string features;
+        opt.EnableGlobalISel = options.globalISel;
+        SmallVector<std::string> features;
         if (targetArch.starts_with("gfx10") ||
             targetArch.starts_with("gfx11")) {
           switch (subgroupSize.value_or(64)) {
           case 32:
-            features = "+wavefrontsize32";
+            features.emplace_back("+wavefrontsize32");
             break;
           default:
           case 64:
-            features = "+wavefrontsize64";
+            features.emplace_back("+wavefrontsize64");
             break;
           }
         }
-        if (!targetFeatures.empty()) {
-          features += (features.empty() ? "" : ",") + targetFeatures.str();
+
+        // Mixed precision fma instructions have complicated semantics on
+        // gf9+ GPUs and can lead to numeric issues as seen in
+        // https://github.com/iree-org/iree/issues/18746 so we disable this
+        // feature.
+        if (targetArch.starts_with("gfx9")) {
+          features.emplace_back("-fma-mix-insts");
         }
 
+        if (!targetFeatures.empty()) {
+          features.emplace_back(targetFeatures.str());
+        }
+
+        std::string featureStr = llvm::join(features, ",");
+
         targetMachine.reset(target->createTargetMachine(
-            triple.str(), targetArch, features, opt, llvm::Reloc::Model::PIC_,
+            triple.str(), targetArch, featureStr, opt, llvm::Reloc::Model::PIC_,
             std::nullopt, llvm::CodeGenOptLevel::Aggressive));
 
         if (!targetMachine) {
@@ -533,29 +519,36 @@ public:
         return failure();
       }
 
-      // Link module to any enabled ukernels.
-      StringRef bitcodeDirectory = options.bitcodeDirectory;
-      StringRef enabledUkernels;
-      if (auto attr = getConfigStringAttr(targetAttr, "ukernels"))
-        enabledUkernels = attr->getValue();
-      if (!enabledUkernels.empty() && enabledUkernels != "none") {
-        if (failed(linkUkernelBitcodeFiles(
-                variantOp.getLoc(), llvmModule.get(), enabledUkernels,
-                targetArch, bitcodeDirectory, llvm::Linker::OverrideFromSrc,
-                *targetMachine))) {
-          return failure();
-        }
+      // Link bitcode (*.bc) object attrs specified by the input program.
+      // Note that this happens after the command-line files so that the command
+      // line ones override the symbols coming from the embedded files.
+      auto specializationCallback = [&](llvm::Module &userModule) {
+        // TODO: inject __nvvm_reflect-style functions/globals for
+        // bitcode specialization based on the targetMachine and configuration.
+        // These could use any information we have on the IREE side as well as
+        // the TargetMachine.
+      };
+      unsigned linkerFlags =
+          llvm::Linker::LinkOnlyNeeded | llvm::Linker::OverrideFromSrc;
+      if (failed(linkBitcodeObjects(variantOp.getLoc(), linker, linkerFlags,
+                                    *targetMachine, variantOp.getObjectsAttr(),
+                                    llvmModule->getContext(),
+                                    specializationCallback))) {
+        return mlir::emitError(variantOp.getLoc())
+               << "failed linking in user objects for target triple '"
+               << targetArch.str() << "'";
       }
 
       // Link module to HIP device library.
-      if (bitcodeDirectory.empty()) {
+      if (options.bitcodeDirectory.empty()) {
         return variantOp.emitError()
                << "cannot find ROCM bitcode files. Check your installation "
                   "consistency and in the worst case, set "
                   "--iree-hip-bc-dir= to a path on your system.";
       }
       if (failed(linkHIPBitcodeIfNeeded(variantOp.getLoc(), llvmModule.get(),
-                                        targetArch, bitcodeDirectory))) {
+                                        targetArch,
+                                        options.bitcodeDirectory))) {
         return failure();
       }
 
@@ -565,22 +558,27 @@ public:
         return failure();
       }
 
-      if (!serOptions.dumpIntermediatesPath.empty()) {
-        dumpModuleToPath(serOptions.dumpIntermediatesPath,
-                         serOptions.dumpBaseName, variantOp.getName(),
+      if (!serializationOptions.dumpIntermediatesPath.empty()) {
+        dumpModuleToPath(serializationOptions.dumpIntermediatesPath,
+                         serializationOptions.dumpBaseName, variantOp.getName(),
                          ".linked.ll", *llvmModule);
       }
 
       // Run LLVM optimization passes.
-      optimizeModule(*llvmModule, *targetMachine);
-      if (!serOptions.dumpIntermediatesPath.empty()) {
-        dumpModuleToPath(serOptions.dumpIntermediatesPath,
-                         serOptions.dumpBaseName, variantOp.getName(),
+      optimizeModule(*llvmModule, *targetMachine, options.passPlugins,
+                     options.slpVectorization);
+      if (!serializationOptions.dumpIntermediatesPath.empty()) {
+        dumpModuleToPath(serializationOptions.dumpIntermediatesPath,
+                         serializationOptions.dumpBaseName, variantOp.getName(),
                          ".optimized.ll", *llvmModule);
       }
 
+      if (failed(validateFinalizedModule(variantOp, *llvmModule))) {
+        return failure();
+      }
+
       // Dump the assembly output.
-      if (!serOptions.dumpIntermediatesPath.empty()) {
+      if (!serializationOptions.dumpIntermediatesPath.empty()) {
         auto moduleCopy = llvm::CloneModule(*llvmModule);
         if (!moduleCopy) {
           llvm::errs() << "Error: cloning LLVM IR failed\n";
@@ -588,9 +586,9 @@ public:
         }
         std::string targetISA =
             translateModuleToISA(*moduleCopy.get(), *targetMachine);
-        dumpDataToPath(serOptions.dumpIntermediatesPath,
-                       serOptions.dumpBaseName, variantOp.getName(), ".rocmasm",
-                       targetISA);
+        dumpDataToPath(serializationOptions.dumpIntermediatesPath,
+                       serializationOptions.dumpBaseName, variantOp.getName(),
+                       ".rocmasm", targetISA);
       }
 
       // Serialize hsaco kernel into the binary that we will embed in the
@@ -601,23 +599,135 @@ public:
         return failure();
     }
 
-    if (!serOptions.dumpBinariesPath.empty()) {
-      dumpDataToPath(serOptions.dumpBinariesPath, serOptions.dumpBaseName,
-                     variantOp.getName(), ".hsaco", targetHSACO);
+    if (!serializationOptions.dumpBinariesPath.empty()) {
+      dumpDataToPath(serializationOptions.dumpBinariesPath,
+                     serializationOptions.dumpBaseName, variantOp.getName(),
+                     ".hsaco", targetHSACO);
     }
 
+    // Wrap the HSACO ELF binary in a Flatbuffers container.
+    FailureOr<DenseIntElementsAttr> binaryContainer;
+    if (getABI(targetAttr) == "amdgpu") {
+      binaryContainer = serializeAMDGPUBinaryContainer(
+          serializationOptions, variantOp, exportOps, targetHSACO);
+    } else {
+      binaryContainer = serializeHIPBinaryContainer(
+          serializationOptions, variantOp, exportOps, targetHSACO);
+    }
+    if (failed(binaryContainer) || !binaryContainer.value()) {
+      return failure();
+    }
+
+    // Add the binary data to the target executable.
+    executableBuilder.create<iree_compiler::IREE::HAL::ExecutableBinaryOp>(
+        variantOp.getLoc(), variantOp.getSymName(),
+        variantOp.getTarget().getFormat(), binaryContainer.value());
+
+    return success();
+  }
+
+protected:
+  FailureOr<DenseIntElementsAttr> serializeAMDGPUBinaryContainer(
+      const SerializationOptions &serializationOptions,
+      IREE::HAL::ExecutableVariantOp variantOp,
+      ArrayRef<IREE::HAL::ExecutableExportOp> exportOps,
+      StringRef hsacoModule) {
+    iree_compiler::FlatbufferBuilder builder;
+    iree_hal_amdgpu_ExecutableDef_start_as_root(builder);
+
+    // Attach embedded source file contents.
+    auto sourceFilesRef = createSourceFilesVec(
+        serializationOptions.debugLevel, variantOp.getSourcesAttr(), builder);
+
+    // Only a single module today.
+    SmallVector<iree_hal_amdgpu_ModuleDef_ref_t> moduleRefs;
+    {
+      auto hsacoImageRef = flatbuffers_string_create(
+          builder, hsacoModule.data(), hsacoModule.size());
+      moduleRefs.push_back(
+          iree_hal_amdgpu_ModuleDef_create(builder, hsacoImageRef));
+    }
+    auto modulesRef = builder.createOffsetVecDestructive(moduleRefs);
+
+    // Generate optional per-export debug information.
+    // May be empty if no debug information was requested.
+    auto exportDebugInfos =
+        createExportDefs(serializationOptions.debugLevel, exportOps, builder);
+
+    SmallVector<iree_hal_amdgpu_ExportDef_ref_t> exportRefs;
+    exportRefs.resize(exportOps.size(), 0);
+    for (auto exportOp : exportOps) {
+      auto ordinalAttr = exportOp.getOrdinalAttr();
+      if (!ordinalAttr) {
+        return mlir::emitError(exportOp.getLoc())
+               << "could not compile rocm binary: export op is missing ordinal";
+      }
+      int64_t ordinal = ordinalAttr.getInt();
+
+      auto symbolNameRef = builder.createString(exportOp.getName());
+
+      iree_hal_amdgpu_Dims_t workgroupSize = {0};
+      if (auto workgroupSizeAttr = exportOp.getWorkgroupSize()) {
+        auto workgroupSizeDims = workgroupSizeAttr->getValue();
+        workgroupSize.x = cast<IntegerAttr>(workgroupSizeDims[0]).getInt();
+        workgroupSize.y = cast<IntegerAttr>(workgroupSizeDims[1]).getInt();
+        workgroupSize.z = cast<IntegerAttr>(workgroupSizeDims[2]).getInt();
+      }
+
+      auto layoutAttr = exportOp.getLayoutAttr();
+      uint32_t constantCount = static_cast<uint32_t>(layoutAttr.getConstants());
+      SmallVector<iree_hal_amdgpu_BindingBits_enum_t> bindingFlags;
+      for (auto bindingAttr : layoutAttr.getBindings()) {
+        iree_hal_amdgpu_BindingBits_enum_t flags = 0;
+        if (allEnumBitsSet(bindingAttr.getFlags(),
+                           IREE::HAL::DescriptorFlags::ReadOnly)) {
+          flags |= iree_hal_amdgpu_BindingBits_READ_ONLY;
+        }
+        if (allEnumBitsSet(bindingAttr.getFlags(),
+                           IREE::HAL::DescriptorFlags::Indirect)) {
+          flags |= iree_hal_amdgpu_BindingBits_INDIRECT;
+        }
+        bindingFlags.push_back(flags);
+      }
+      auto bindingFlagsRef = iree_hal_amdgpu_BindingBits_vec_create(
+          builder, bindingFlags.data(), bindingFlags.size());
+
+      iree_hal_amdgpu_ExportDef_start(builder);
+      iree_hal_amdgpu_ExportDef_symbol_name_add(builder, symbolNameRef);
+      iree_hal_amdgpu_ExportDef_workgroup_size_add(builder, &workgroupSize);
+      iree_hal_amdgpu_ExportDef_constant_count_add(builder, constantCount);
+      iree_hal_amdgpu_ExportDef_binding_flags_add(builder, bindingFlagsRef);
+      iree_hal_amdgpu_ExportDef_debug_info_add(builder,
+                                               exportDebugInfos[ordinal]);
+      exportRefs[ordinal] = iree_hal_amdgpu_ExportDef_end(builder);
+    }
+    auto exportsRef = builder.createOffsetVecDestructive(exportRefs);
+
+    iree_hal_amdgpu_ExecutableDef_exports_add(builder, exportsRef);
+    iree_hal_amdgpu_ExecutableDef_modules_add(builder, modulesRef);
+    iree_hal_amdgpu_ExecutableDef_source_files_add(builder, sourceFilesRef);
+    iree_hal_amdgpu_ExecutableDef_end_as_root(builder);
+
+    return builder.getBufferAttr(variantOp.getContext());
+  }
+
+  FailureOr<DenseIntElementsAttr>
+  serializeHIPBinaryContainer(const SerializationOptions &serializationOptions,
+                              IREE::HAL::ExecutableVariantOp variantOp,
+                              ArrayRef<IREE::HAL::ExecutableExportOp> exportOps,
+                              StringRef hsacoModule) {
     iree_compiler::FlatbufferBuilder builder;
     iree_hal_hip_ExecutableDef_start_as_root(builder);
 
     // Attach embedded source file contents.
     auto sourceFilesRef = createSourceFilesVec(
-        serOptions.debugLevel, variantOp.getSourcesAttr(), builder);
+        serializationOptions.debugLevel, variantOp.getSourcesAttr(), builder);
 
     // Only a single module today.
     SmallVector<iree_hal_hip_ModuleDef_ref_t> moduleRefs;
     {
       auto hsacoImageRef = flatbuffers_string_create(
-          builder, targetHSACO.c_str(), targetHSACO.size());
+          builder, hsacoModule.data(), hsacoModule.size());
       moduleRefs.push_back(
           iree_hal_hip_ModuleDef_create(builder, hsacoImageRef));
     }
@@ -626,7 +736,7 @@ public:
     // Generate optional per-export debug information.
     // May be empty if no debug information was requested.
     auto exportDebugInfos =
-        createExportDefs(serOptions.debugLevel, exportOps, builder);
+        createExportDefs(serializationOptions.debugLevel, exportOps, builder);
 
     SmallVector<iree_hal_hip_ExportDef_ref_t> exportRefs;
     exportRefs.resize(exportOps.size(), 0);
@@ -690,27 +800,92 @@ public:
     iree_hal_hip_ExecutableDef_source_files_add(builder, sourceFilesRef);
     iree_hal_hip_ExecutableDef_end_as_root(builder);
 
-    // Add the binary data to the target executable.
-    executableBuilder.create<iree_compiler::IREE::HAL::ExecutableBinaryOp>(
-        variantOp.getLoc(), variantOp.getSymName(),
-        variantOp.getTarget().getFormat(),
-        builder.getBufferAttr(executableBuilder.getContext()));
-
-    return success();
+    return builder.getBufferAttr(variantOp.getContext());
   }
 
 private:
-  const ROCmOptions &options;
+  const ROCMOptions &options;
+};
+
+class AMDGPUTargetDevice final : public TargetDevice {
+public:
+  AMDGPUTargetDevice(const ROCMOptions &options) : options(options) {}
+
+  IREE::HAL::DeviceTargetAttr
+  getDefaultDeviceTarget(MLIRContext *context,
+                         const TargetRegistry &targetRegistry) const override {
+    Builder b(context);
+
+    SmallVector<NamedAttribute> deviceConfigAttrs;
+    auto deviceConfigAttr = b.getDictionaryAttr(deviceConfigAttrs);
+
+    SmallVector<NamedAttribute> executableConfigAttrs;
+    auto executableConfigAttr = b.getDictionaryAttr(executableConfigAttrs);
+
+    // If we had multiple target environments we would generate one target attr
+    // per environment, with each setting its own environment attribute.
+    SmallVector<IREE::HAL::ExecutableTargetAttr> executableTargetAttrs;
+    targetRegistry.getTargetBackend("rocm")->getDefaultExecutableTargets(
+        context, "amdgpu", executableConfigAttr, executableTargetAttrs);
+
+    return IREE::HAL::DeviceTargetAttr::get(context, b.getStringAttr("amdgpu"),
+                                            deviceConfigAttr,
+                                            executableTargetAttrs);
+  }
+
+private:
+  const ROCMOptions &options;
+};
+
+class HIPTargetDevice final : public TargetDevice {
+public:
+  HIPTargetDevice(const ROCMOptions &options) : options(options) {}
+
+  IREE::HAL::DeviceTargetAttr
+  getDefaultDeviceTarget(MLIRContext *context,
+                         const TargetRegistry &targetRegistry) const override {
+    Builder b(context);
+
+    SmallVector<NamedAttribute> deviceConfigAttrs;
+    if (options.legacySync) {
+      // Indicates that the runtime HAL driver operates only in the legacy
+      // synchronous mode.
+      deviceConfigAttrs.emplace_back(b.getStringAttr("legacy_sync"),
+                                     b.getUnitAttr());
+    }
+    auto deviceConfigAttr = b.getDictionaryAttr(deviceConfigAttrs);
+
+    SmallVector<NamedAttribute> executableConfigAttrs;
+    auto executableConfigAttr = b.getDictionaryAttr(executableConfigAttrs);
+
+    // If we had multiple target environments we would generate one target attr
+    // per environment, with each setting its own environment attribute.
+    SmallVector<IREE::HAL::ExecutableTargetAttr> executableTargetAttrs;
+    targetRegistry.getTargetBackend("rocm")->getDefaultExecutableTargets(
+        context, "hip", executableConfigAttr, executableTargetAttrs);
+
+    return IREE::HAL::DeviceTargetAttr::get(context, b.getStringAttr("hip"),
+                                            deviceConfigAttr,
+                                            executableTargetAttrs);
+  }
+
+private:
+  const ROCMOptions &options;
 };
 
 namespace {
+
 struct ROCMSession final
-    : PluginSession<ROCMSession, ROCmOptions,
+    : PluginSession<ROCMSession, ROCMOptions,
                     PluginActivationPolicy::DefaultActivated> {
   void populateHALTargetDevices(IREE::HAL::TargetDeviceList &targets) {
+    // #hal.device.target<"amdgpu", ...
+    targets.add("amdgpu", [&]() {
+      return std::make_shared<AMDGPUTargetDevice>(options);
+    });
     // #hal.device.target<"hip", ...
     targets.add("hip",
-                [&]() { return std::make_shared<ROCMTargetDevice>(options); });
+                [&]() { return std::make_shared<HIPTargetDevice>(options); });
   }
   void populateHALTargetBackends(IREE::HAL::TargetBackendList &targets) {
     // #hal.executable.target<"rocm", ...
@@ -729,11 +904,24 @@ struct ROCMSession final
 
 } // namespace mlir::iree_compiler::IREE::HAL
 
+// Iterate over ukernel bitcode embedded-data files, and insert them into the
+// EmbeddedDataDirectory singleton.
+static void addAMDGPUUkernelBitcodeToGlobalEmbeddedDataDirectory() {
+  using mlir::iree_compiler::EmbeddedDataDirectory;
+  EmbeddedDataDirectory::withGlobal([](EmbeddedDataDirectory &dir) {
+    const iree_file_toc_t *toc = iree_uk_amdgpu_bitcode_create();
+    for (size_t i = 0; i < iree_uk_amdgpu_bitcode_size(); ++i) {
+      dir.addFile(toc[i].name, llvm::StringRef{toc[i].data, toc[i].size});
+    }
+  });
+}
+
 extern "C" bool iree_register_compiler_plugin_hal_target_rocm(
     mlir::iree_compiler::PluginRegistrar *registrar) {
   registrar->registerPlugin<mlir::iree_compiler::IREE::HAL::ROCMSession>(
       "hal_target_rocm");
+  addAMDGPUUkernelBitcodeToGlobalEmbeddedDataDirectory();
   return true;
 }
 
-IREE_DEFINE_COMPILER_OPTION_FLAGS(mlir::iree_compiler::IREE::HAL::ROCmOptions);
+IREE_DEFINE_COMPILER_OPTION_FLAGS(mlir::iree_compiler::IREE::HAL::ROCMOptions);

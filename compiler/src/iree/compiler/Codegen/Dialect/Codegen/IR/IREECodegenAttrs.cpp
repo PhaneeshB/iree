@@ -8,11 +8,13 @@
 
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenDialect.h"
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenInterfaces.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenTypes.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/Transform/IR/TransformOps.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
+#include "mlir/Dialect/Utils/StructuredOpsUtils.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/StorageUniquerSupport.h"
 
@@ -20,7 +22,6 @@
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenAttrs.cpp.inc"
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/LoweringConfigEnums.cpp.inc"
 
-static const char kConfigAttrName[] = "lowering_config";
 static const char kTranslationInfoAttrName[] = "translation_info";
 static const char kCompilationInfoAttrName[] = "compilation_info";
 
@@ -323,6 +324,10 @@ bool LoweringConfigAttr::hasTilingLevel(unsigned level) const {
   return !getTileSizeVals(level).empty();
 }
 
+bool LoweringConfigAttr::hasWorkgroupTilingLevel() const {
+  return !getWorkgroupTileSizes().empty();
+}
+
 LogicalResult
 LoweringConfigAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                            LoweringConfigTilingLevelsAttr levels,
@@ -456,6 +461,21 @@ int64_t WorkgroupMappingAttr::getRelativeIndex() const {
   return getMappingId();
 }
 
+//===---------------------------------------------------------------------===//
+// iree_codegen.encoding_nop_layout
+//===---------------------------------------------------------------------===//
+
+MaterializeEncodingInfo
+EncodingNopLayoutAttr::getEncodingInfo(RankedTensorType type) const {
+  return MaterializeEncodingInfo{};
+}
+
+Operation *EncodingNopLayoutAttr::lowerOp(OpBuilder &b, Operation *op,
+                                          TypeRange convertedResTypes,
+                                          ValueRange convertedOperands) const {
+  return clone(b, op, convertedResTypes, convertedOperands);
+}
+
 //===----------------------------------------------------------------------===//
 // Initialize attributes
 //===----------------------------------------------------------------------===//
@@ -472,8 +492,8 @@ void IREECodegenDialect::initializeCodegenAttrs() {
 namespace mlir::iree_compiler {
 
 //===----------------------------------------------------------------------===//
-// Helpers for getting/setting iree_codegen.translation_info attribute on the
-// `hal.executable.export`
+// Helpers for getting/setting iree_codegen.translation_info attribute on a
+// FunctionOpInterface op.
 // ===----------------------------------------------------------------------===//
 
 IREE::Codegen::TranslationInfoAttr

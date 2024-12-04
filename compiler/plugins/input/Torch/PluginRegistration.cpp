@@ -23,12 +23,16 @@ namespace {
 
 struct TorchOptions {
   bool strictSymbolicShapes = true;
+  bool decompose = true;
   void bindOptions(OptionsBinder &binder) {
     static llvm::cl::OptionCategory category("Torch Input");
     binder.opt<bool>(
         "iree-torch-use-strict-symbolic-shapes", strictSymbolicShapes,
         llvm::cl::cat(category),
         llvm::cl::desc("Forces dynamic shapes to be treated as strict"));
+    binder.opt<bool>("iree-torch-decompose-complex-ops", decompose,
+                     llvm::cl::cat(category),
+                     llvm::cl::desc("Decompose complex torch operations."));
   }
 };
 
@@ -57,13 +61,18 @@ struct TorchSession
       OpPassManager &passManager, std::string_view typeMnemonic) override {
     if (typeMnemonic == "onnx") {
       // ONNX input is a pre-processing step to torch.
-      passManager.addNestedPass<func::FuncOp>(
-          mlir::torch::onnx_c::createTorchOnnxToTorchPass());
+      mlir::torch::Torch::TorchLoweringPipelineOptions torchOnnxPipelineOptions;
+      torchOnnxPipelineOptions.decompose = options.decompose;
+      torchOnnxPipelineOptions.backendLegalOps =
+          TorchInput::BackendLegalOps::get();
+      mlir::torch::Torch::createTorchOnnxToTorchBackendPipeline(
+          passManager, torchOnnxPipelineOptions);
     }
 
     if (typeMnemonic == "torch" || typeMnemonic == "onnx") {
       TorchInput::TorchToIREELoweringPipelineOptions torchOptions;
       torchOptions.strictSymbolicShapes = options.strictSymbolicShapes;
+      torchOptions.decompose = options.decompose;
       TorchInput::createTorchToIREEPipeline(passManager, torchOptions);
       return true;
     }

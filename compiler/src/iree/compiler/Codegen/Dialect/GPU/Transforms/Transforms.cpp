@@ -9,9 +9,12 @@
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenAttrs.h"
 #include "iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUAttrs.h"
 #include "iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUOps.h"
+#include "iree/compiler/Codegen/Utils/GPUUtils.h"
+#include "iree/compiler/Codegen/Utils/MarkerUtils.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/MathExtras.h"
@@ -33,6 +36,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/TypeUtilities.h"
 
 #define DEBUG_TYPE "iree-codegen-gpu-transforms"
 
@@ -59,24 +63,10 @@ getEquivalentMappingConsumerLoopNest(scf::ForallOp producer,
     return failure();
   }
 
-  auto isDescendingRelativeIndices = [&](ArrayRef<Attribute> array) {
-    int64_t prev =
-        llvm::cast<DeviceMappingAttrInterface>(array[0]).getRelativeIndex();
-    for (Attribute attr : array.drop_front()) {
-      int64_t relativeIndex =
-          llvm::cast<DeviceMappingAttrInterface>(attr).getRelativeIndex();
-      if (relativeIndex != prev - 1) {
-        return false;
-      }
-      prev = relativeIndex;
-    }
-    return true;
-  };
-
   // Require descending relative indices so that the linearization and
   // delinearization done in subsequent steps are valid.
-  if (!isDescendingRelativeIndices(producerMapping) ||
-      !isDescendingRelativeIndices(consumerMapping)) {
+  if (!isDescendingRelativeMappingIndices(producerMapping) ||
+      !isDescendingRelativeMappingIndices(consumerMapping)) {
     return failure();
   }
 
@@ -120,44 +110,18 @@ static FailureOr<Value> createSharedAllocDestination(RewriterBase &rewriter,
   Attribute sharedMemoryAddrSpace = gpu::AddressSpaceAttr::get(
       rewriter.getContext(), gpu::GPUDialect::getWorkgroupAddressSpace());
   auto allocTensor = rewriter.create<bufferization::AllocTensorOp>(
-      empty->getLoc(), empty->getResultTypes()[0], empty.getDynamicSizes());
-  allocTensor.setMemorySpaceAttr(sharedMemoryAddrSpace);
+      empty->getLoc(), cast<TensorType>(empty.getResult().getType()),
+      empty.getDynamicSizes(),
+      /*copy=*/Value(), /*size_hint=*/Value(),
+      /*memory_space=*/sharedMemoryAddrSpace);
   return allocTensor.getResult();
 }
 
-static void replaceConsumerChain(RewriterBase &rewriter, Location loc,
-                                 Value source, Value replacement,
-                                 SmallVector<Operation *> consumerChain) {
-  auto extractSlice = cast<tensor::ExtractSliceOp>(consumerChain.back());
-  OpBuilder::InsertionGuard g(rewriter);
-
-  auto barrierRegionOp = rewriter.create<IREE::GPU::BarrierRegionOp>(
-      loc, extractSlice.getType(), replacement);
-  rewriter.setInsertionPointToStart(barrierRegionOp.getBody());
-  auto terminator =
-      rewriter.create<IREE::GPU::YieldOp>(loc, extractSlice.getResult());
-  for (auto consumer : consumerChain) {
-    rewriter.moveOpBefore(consumer, terminator);
-  }
-  (*consumerChain.begin())
-      ->replaceUsesOfWith(source, barrierRegionOp.getBody()->getArgument(0));
-  rewriter.replaceAllUsesExcept(extractSlice.getResult(), barrierRegionOp,
-                                terminator);
-}
-
-LogicalResult fuseForallIntoSlice(RewriterBase &rewriter,
-                                  scf::ForallOp producer,
-                                  scf::ForallOp consumer,
-                                  SmallVector<Operation *> consumerChain) {
-  if (consumerChain.empty()) {
-    return failure();
-  }
-
-  auto slice = dyn_cast<tensor::ExtractSliceOp>(consumerChain.back());
-  if (!slice) {
-    return failure();
-  }
-
+LogicalResult fuseForallIntoConsumer(RewriterBase &rewriter,
+                                     scf::ForallOp producer,
+                                     scf::ForallOp consumer,
+                                     SmallVector<Operation *> consumerChain) {
+  // TODO: Support multi-result producer loops.
   if (producer->getNumResults() != 1) {
     return failure();
   }
@@ -168,36 +132,41 @@ LogicalResult fuseForallIntoSlice(RewriterBase &rewriter,
     return failure();
   }
 
-  auto isAll = [](ArrayRef<OpFoldResult> array, int64_t cmp) {
-    return llvm::all_of(array, [cmp](OpFoldResult val) {
-      return isConstantIntValue(val, cmp);
-    });
-  };
-
-  // Verify that both loops are normalized.
-  if (!isAll(producer.getMixedStep(), 1) ||
-      !isAll(producer.getMixedLowerBound(), 0)) {
+  // Verify that all loops are normalized.
+  if (!producer.isNormalized() ||
+      !llvm::all_of(consumerLoopNest.value(), [](scf::ForallOp forall) {
+        return forall.isNormalized();
+      })) {
     return failure();
   }
-
-  for (auto loop : *consumerLoopNest) {
-    if (!isAll(loop.getMixedStep(), 1) ||
-        !isAll(loop.getMixedLowerBound(), 0)) {
-      return failure();
-    }
-  }
-
-  rewriter.setInsertionPoint(slice);
 
   // Step 1. Get the destination of the producer loop as a shared memory
   // allocation.
-  FailureOr<Value> sharedDest =
-      createSharedAllocDestination(rewriter, producer);
-  if (failed(sharedDest)) {
+  rewriter.setInsertionPointToStart(consumer.getBody());
+  FailureOr<Value> maybeDest = createSharedAllocDestination(rewriter, producer);
+  if (failed(maybeDest)) {
     return failure();
   }
+  Value sharedDest = maybeDest.value();
 
-  // Step 2. Compute the producer IDs in terms of the consumer IDs.
+  // Step 2. Move the consumer chain to right before the last user in the
+  // chain.
+  if (!consumerChain.empty()) {
+    Operation *base = consumerChain.back();
+    for (Operation *op : consumerChain) {
+      if (op == base) {
+        continue;
+      }
+      rewriter.moveOpBefore(op, base);
+    }
+  }
+
+  // Step 3. Create the `iree_gpu.barrier_region` to wrap the fused producer.
+  auto barrierOp = rewriter.create<IREE::GPU::BarrierRegionOp>(
+      producer.getLoc(), sharedDest.getType(), sharedDest);
+  rewriter.setInsertionPointToStart(barrierOp.getBody());
+
+  // Step 4. Compute the producer IDs in terms of the consumer IDs.
   // The producer IDs are computed as follows:
   //
   // producer = [p0, ..., pn] ∈ [0, ..., 0] to [P0, ..., Pn]
@@ -240,11 +209,10 @@ LogicalResult fuseForallIntoSlice(RewriterBase &rewriter,
   // Compute the total producer loop worker count (P0 * ... * Pn).
   Value linearConsumerIdVal =
       getValueOrCreateConstantIndexOp(rewriter, loc, linearId);
-  SmallVector<Value> producerRanges;
+  SmallVector<OpFoldResult> producerRanges;
   OpFoldResult producerWorkerCount = rewriter.getIndexAttr(1);
   for (auto workerCount : producer.getMixedUpperBound()) {
-    producerRanges.push_back(
-        getValueOrCreateConstantIndexOp(rewriter, loc, workerCount));
+    producerRanges.push_back(workerCount);
     producerWorkerCount = affine::makeComposedFoldedAffineApply(
         rewriter, loc, d0 * d1, {producerWorkerCount, workerCount});
   }
@@ -257,7 +225,7 @@ LogicalResult fuseForallIntoSlice(RewriterBase &rewriter,
       staticConsumerCount && staticProducerCount &&
       staticProducerCount.value() % staticConsumerCount.value() == 0;
 
-  // Step 3. Create the `scf.for` loop for the producer.
+  // Step 5. Create the `scf.for` loop for the producer.
   // If the consumer worker count perfectly divides the producer worker count,
   // then we can use a lower bound of 0 and keep the loop bounds static.
   Value lb = perfectlyDivides ? rewriter.create<arith::ConstantIndexOp>(loc, 0)
@@ -266,8 +234,9 @@ LogicalResult fuseForallIntoSlice(RewriterBase &rewriter,
       getValueOrCreateConstantIndexOp(rewriter, loc, producerWorkerCount);
   Value step =
       getValueOrCreateConstantIndexOp(rewriter, loc, consumerWorkerCount);
-  auto newProducer =
-      rewriter.create<scf::ForOp>(loc, lb, ub, step, *sharedDest);
+  auto newProducer = rewriter.create<scf::ForOp>(
+      loc, lb, ub, step, barrierOp.getBody()->getArgument(0));
+  setLoopUnrollMarker(newProducer);
   Block *loopBody = newProducer.getBody();
 
   // Get the replacement IDs for the producer loop.
@@ -279,17 +248,17 @@ LogicalResult fuseForallIntoSlice(RewriterBase &rewriter,
                 {newProducer.getInductionVar(), linearConsumerIdVal})
           : newProducer.getInductionVar();
 
-  // We require a descending relative mapping, so delinearize in reverse order.
+  // We require a descending relative mapping and scf.forall loop ranges are
+  // listed from outer most to inner most, so we can use the ranges directly
+  // for the delinearization basis.
   auto delinearize = rewriter.create<affine::AffineDelinearizeIndexOp>(
-      loc, newFlatProducerId, llvm::to_vector(llvm::reverse(producerRanges)));
+      loc, newFlatProducerId, llvm::to_vector(producerRanges));
 
-  SmallVector<Value> newBlockArgs =
-      llvm::map_to_vector(llvm::reverse(delinearize.getResults()),
-                          [](OpResult r) -> Value { return r; });
+  SmallVector<Value> newBlockArgs = delinearize.getResults();
   newBlockArgs.append(newProducer.getRegionIterArgs().begin(),
                       newProducer.getRegionIterArgs().end());
 
-  // Step 4. Inline the region of the producer and replace the terminator.
+  // Step 6. Inline the region of the producer and replace the terminator.
   scf::InParallelOp terminator = producer.getTerminator();
   rewriter.mergeBlocks(producer.getBody(), loopBody, newBlockArgs);
 
@@ -309,13 +278,12 @@ LogicalResult fuseForallIntoSlice(RewriterBase &rewriter,
   rewriter.eraseOp(parallelInsert);
   rewriter.eraseOp(terminator);
 
-  // Step 5. Replace the extract slice with a `barrier_region` op to indicate
-  // synchronization of the shared tensor.
-  rewriter.setInsertionPointAfter(newProducer);
-  replaceConsumerChain(rewriter, loc, producer.getResult(0),
-                       newProducer.getResult(0), consumerChain);
+  // Step 7. Yield the result of the loop from the barrier op and replace the
+  // producer.
+  rewriter.setInsertionPointToEnd(barrierOp.getBody());
+  rewriter.create<IREE::GPU::YieldOp>(loc, newProducer.getResults());
 
-  rewriter.eraseOp(producer);
+  rewriter.replaceOp(producer, barrierOp);
   return success();
 }
 
@@ -534,8 +502,9 @@ convertContractionToMultiMma(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
 // MultiMmaOp Distribution
 //===----------------------------------------------------------------------===//
 
-FailureOr<Operation *> distributeMultiMmaOp(RewriterBase &rewriter,
-                                            IREE::GPU::MultiMmaOp mmaOp) {
+FailureOr<Operation *>
+distributeMultiMmaOp(RewriterBase &rewriter, IREE::GPU::MultiMmaOp mmaOp,
+                     std::optional<SmallVector<int64_t>> workgroupSize) {
   if (!mmaOp.hasTensorSemantics() || mmaOp.hasThreadSemantics()) {
     return rewriter.notifyMatchFailure(
         mmaOp, "mmaOp must have vector and subgroup for distribution.");
@@ -550,12 +519,31 @@ FailureOr<Operation *> distributeMultiMmaOp(RewriterBase &rewriter,
   OpFoldResult one = rewriter.getIndexAttr(1);
 
   // Step 1. Create the new scf.forall op with a lane id mapping.
+  OpFoldResult ub;
+  Attribute mappingType;
+  FailureOr<IREE::GPU::MMAScope> mmaScope = mmaOp.getKind().getMmaScope();
+  if (failed(mmaScope)) {
+    return failure();
+  }
+  switch (mmaScope.value()) {
+  case IREE::GPU::MMAScope::Workgroup:
+    if (!workgroupSize) {
+      mmaOp.emitOpError("Mma op with workgroup scope needs workgroup size.");
+      return failure();
+    }
+    mappingType =
+        gpu::GPUThreadMappingAttr::get(context, gpu::MappingId::LinearDim0);
+    ub = rewriter.getIndexAttr(
+        ShapedType::getNumElements(workgroupSize.value()));
+    break;
+  case IREE::GPU::MMAScope::Subgroup:
+    ub = rewriter.getIndexAttr(mmaOp.getKind().getSubgroupSize());
+    mappingType = IREE::GPU::LaneIdAttr::get(context, 0);
+  }
   auto newForallOp = rewriter.create<scf::ForallOp>(
-      loc, ArrayRef<OpFoldResult>{zero},
-      ArrayRef<OpFoldResult>{
-          rewriter.getIndexAttr(mmaOp.getKind().getSubgroupSize())},
+      loc, ArrayRef<OpFoldResult>{zero}, ArrayRef<OpFoldResult>{ub},
       ArrayRef<OpFoldResult>{one}, mmaOp.getAcc(),
-      ArrayAttr::get(context, {IREE::GPU::LaneIdAttr::get(context, 0)}));
+      ArrayAttr::get(context, {mappingType}));
 
   rewriter.setInsertionPointToStart(newForallOp.getBody());
 
@@ -568,7 +556,7 @@ FailureOr<Operation *> distributeMultiMmaOp(RewriterBase &rewriter,
     }
     return llvm::to_vector(llvm::seq(static_cast<int64_t>(0), rank));
   };
-  Value laneId = newForallOp.getInductionVar(0);
+  Value id = newForallOp.getInductionVar(0);
 
   // LHS slice offsets.
   int64_t lhsOuterRank = mmaOp.getLhsOuterRank();
@@ -581,7 +569,7 @@ FailureOr<Operation *> distributeMultiMmaOp(RewriterBase &rewriter,
   SmallVector<int64_t> lhsPermutation = getOrInferPermutationOfRank(
       mmaOp.getLhsPermutation(), mmaOp.getLhsInnerShape().size());
   if (failed(mmaOp.getKind().populateOperandOffsetsSizesStrides(
-          rewriter, loc, IREE::GPU::MMAFragment::Lhs, laneId, lhsPermutation,
+          rewriter, loc, IREE::GPU::MMAFragment::Lhs, id, lhsPermutation,
           lhsOffsets, lhsSizes, lhsStrides))) {
     return mmaOp->emitOpError("failed to populate lhs offsets");
   }
@@ -601,7 +589,7 @@ FailureOr<Operation *> distributeMultiMmaOp(RewriterBase &rewriter,
   SmallVector<int64_t> rhsPermutation = getOrInferPermutationOfRank(
       mmaOp.getRhsPermutation(), mmaOp.getRhsInnerShape().size());
   if (failed(mmaOp.getKind().populateOperandOffsetsSizesStrides(
-          rewriter, loc, IREE::GPU::MMAFragment::Rhs, laneId, rhsPermutation,
+          rewriter, loc, IREE::GPU::MMAFragment::Rhs, id, rhsPermutation,
           rhsOffsets, rhsSizes, rhsStrides))) {
     return mmaOp->emitOpError("failed to populate rhs offsets");
   }
@@ -621,7 +609,7 @@ FailureOr<Operation *> distributeMultiMmaOp(RewriterBase &rewriter,
   SmallVector<int64_t> accPermutation = getOrInferPermutationOfRank(
       mmaOp.getAccPermutation(), mmaOp.getAccInnerShape().size());
   if (failed(mmaOp.getKind().populateOperandOffsetsSizesStrides(
-          rewriter, loc, IREE::GPU::MMAFragment::Acc, laneId, accPermutation,
+          rewriter, loc, IREE::GPU::MMAFragment::Acc, id, accPermutation,
           accOffsets, accSizes, accStrides))) {
     return mmaOp->emitOpError("failed to populate acc offsets");
   }
@@ -632,9 +620,16 @@ FailureOr<Operation *> distributeMultiMmaOp(RewriterBase &rewriter,
       accStrides);
 
   // Step 3. Create the new multi_mma op.
+  auto newKind = mmaOp.getKind();
+  if (auto dataTiledMma = dyn_cast<DataTiledMMAAttr>(newKind)) {
+    newKind = DataTiledMMAAttr::get(
+        context, dataTiledMma.getIntrinsic(), dataTiledMma.getUnrollM(),
+        /*subgroups_m=*/1, dataTiledMma.getUnrollN(),
+        /*subgroups_n=*/1, dataTiledMma.getUnrollK());
+  }
   auto newMmaOp = rewriter.create<IREE::GPU::MultiMmaOp>(
       loc, lhsSlice, rhsSlice, accSlice, mmaOp.getIndexingMaps(),
-      mmaOp.getIteratorTypes(), mmaOp.getKind());
+      mmaOp.getIteratorTypes(), newKind);
 
   // Step 4. Insert the result of the multi_mma using the same offsets/sizes as
   // the accumulator slice.
@@ -999,20 +994,19 @@ struct LowerBarrierRegion
 
     // Step 1. Synchronize the workers on the shared dest.
     auto writeBarrier = rewriter.create<IREE::GPU::ValueBarrierOp>(
-        loc, barrierRegionOp.getDest());
+        loc, barrierRegionOp.getInputs());
 
     // Step 2. Inline the barrier op region.
     auto terminator = barrierRegionOp.getBody()->getTerminator();
-    Value replacement = terminator->getOperand(0);
     rewriter.inlineBlockBefore(barrierRegionOp.getBody(), barrierRegionOp,
-                               {writeBarrier.getResult(0)});
-    rewriter.setInsertionPointAfterValue(replacement);
-    Value barrier;
+                               writeBarrier.getResults());
+    rewriter.setInsertionPoint(terminator);
 
     // Step 3. Synchronize the result value.
-    barrier = rewriter.create<IREE::GPU::ValueBarrierOp>(loc, replacement)
-                  .getResult(0);
-    rewriter.replaceAllUsesWith(barrierRegionOp.getResult(), barrier);
+    auto barrier = rewriter.create<IREE::GPU::ValueBarrierOp>(
+        loc, terminator->getOperands());
+    rewriter.replaceAllUsesWith(barrierRegionOp.getResults(),
+                                barrier.getResults());
     rewriter.eraseOp(terminator);
     return success();
   }
@@ -1089,69 +1083,8 @@ struct VectorizeStaticMultiMmaOpPattern final
 };
 } // namespace
 
-static LogicalResult
-vectorizeStaticBarrierRegionResult(RewriterBase &rewriter,
-                                   IREE::GPU::BarrierRegionOp barrier) {
-  auto tensorResultType =
-      dyn_cast<RankedTensorType>(barrier.getResult().getType());
-  if (!tensorResultType || !tensorResultType.hasStaticShape()) {
-    return failure();
-  }
-
-  VectorType newResultType = VectorType::get(tensorResultType.getShape(),
-                                             tensorResultType.getElementType());
-
-  auto paddingValue = rewriter.create<arith::ConstantOp>(
-      barrier.getLoc(), rewriter.getZeroAttr(newResultType.getElementType()));
-
-  auto newBarrier = rewriter.create<IREE::GPU::BarrierRegionOp>(
-      barrier.getLoc(), newResultType, barrier.getDest());
-
-  auto currentTerminator =
-      cast<IREE::GPU::YieldOp>(barrier.getBody()->getTerminator());
-  rewriter.mergeBlocks(barrier.getBody(), newBarrier.getBody(),
-                       newBarrier.getBody()->getArguments());
-  rewriter.setInsertionPointToEnd(newBarrier.getBody());
-
-  auto innerRead = vector::createReadOrMaskedRead(
-      rewriter, currentTerminator.getLoc(), currentTerminator->getOperand(0),
-      newResultType.getShape(), paddingValue,
-      /*useInBoundsInsteadOfMasking=*/true);
-  rewriter.create<IREE::GPU::YieldOp>(currentTerminator->getLoc(), innerRead);
-  rewriter.eraseOp(currentTerminator);
-
-  rewriter.setInsertionPointAfter(newBarrier);
-
-  // Create the write back to a tensor.
-  auto empty = rewriter.create<tensor::EmptyOp>(
-      barrier.getLoc(), tensorResultType.getShape(),
-      tensorResultType.getElementType());
-  int64_t rank = tensorResultType.getRank();
-  auto zero = rewriter.create<arith::ConstantIndexOp>(barrier.getLoc(), 0);
-  rewriter.replaceOpWithNewOp<vector::TransferWriteOp>(
-      barrier,
-      /*vector=*/newBarrier,
-      /*source=*/empty,
-      /*indices=*/SmallVector<Value>(rank, zero),
-      /*inBounds=*/SmallVector<bool>(rank, true));
-  return success();
-}
-
-namespace {
-struct VectorizeStaticBarrierRegionResultPattern
-    : public OpRewritePattern<IREE::GPU::BarrierRegionOp> {
-  using OpRewritePattern<IREE::GPU::BarrierRegionOp>::OpRewritePattern;
-  LogicalResult matchAndRewrite(IREE::GPU::BarrierRegionOp shuffle,
-                                PatternRewriter &rewriter) const override {
-    return vectorizeStaticBarrierRegionResult(rewriter, shuffle);
-  }
-};
-} // namespace
-
 void populateIREEGPUVectorizationPatterns(RewritePatternSet &patterns) {
   patterns.add<VectorizeStaticMultiMmaOpPattern>(patterns.getContext());
-  patterns.add<VectorizeStaticBarrierRegionResultPattern>(
-      patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//

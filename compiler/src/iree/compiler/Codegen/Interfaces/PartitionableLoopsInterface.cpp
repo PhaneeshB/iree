@@ -6,9 +6,12 @@
 
 #include "iree/compiler/Codegen/Interfaces/PartitionableLoopsInterface.h"
 
+#include "iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUDialect.h"
+#include "iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUOps.h"
 #include "iree/compiler/Dialect/LinalgExt/IR/LinalgExtDialect.h"
 #include "iree/compiler/Dialect/LinalgExt/IR/LinalgExtOps.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallVectorExtras.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -24,10 +27,9 @@ namespace mlir::iree_compiler {
 static llvm::SmallVector<unsigned>
 pruneUnitTripParallelLoops(llvm::ArrayRef<unsigned> parallelLoops,
                            llvm::ArrayRef<int64_t> loopRanges) {
-  return llvm::to_vector(
-      llvm::make_filter_range(parallelLoops, [&loopRanges](unsigned loopDim) {
-        return loopRanges[loopDim] != 1;
-      }));
+  return llvm::filter_to_vector(parallelLoops, [&loopRanges](unsigned loopDim) {
+    return loopRanges[loopDim] != 1;
+  });
 }
 
 /// Returns the partitionable loops for all Linalg ops.
@@ -268,6 +270,11 @@ void registerPartitionableLoopsInterfaceModels(DialectRegistry &registry) {
     tensor::UnPackOp::attachInterface<
         OuterParallelAsPartitionableLoops<tensor::UnPackOp>>(*ctx);
   });
+  registry.addExtension(
+      +[](MLIRContext *ctx, IREE::GPU::IREEGPUDialect *dialect) {
+        IREE::GPU::MultiMmaOp::attachInterface<
+            OuterParallelAsPartitionableLoops<IREE::GPU::MultiMmaOp>>(*ctx);
+      });
 }
 
 } // namespace mlir::iree_compiler

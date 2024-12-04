@@ -113,6 +113,7 @@ def SinkReshapesPass :
   let dependentDialects = [
     "mlir::affine::AffineDialect",
     "mlir::arith::ArithDialect",
+    "IREE::LinalgExt::IREELinalgExtDialect",
   ];
 }
 
@@ -183,37 +184,8 @@ def CollapseDimensionsPass :
     Collapse dimensions of Linalg Ops on tensor ops inside dispatch.region ops
     and hoist the reshaping operations out of the dispatch.
   }];
-}
-
-def DispatchWithTransformDialectPass : Pass<"iree-dispatch-creation-dispatch-with-transform-dialect"> {
-  let summary = "Dispatch Linalg operations on tensors by using the transform dialect interpreter.";
-  let description = [{
-    Pass to perform dispatch of Linalg on tensor ops by using the transform
-    dialect. Dispatch regions are created as specified by the transform module
-    that is parsed from `transformSpecPath`.
-
-    TODO: Drop this pass in favor of the one upstream. The one upstream requires
-    separate loading of the module and thus isn't suited for single-use
-    transform scripts.
-  }];
   let dependentDialects = [
-    "mlir::affine::AffineDialect",
-    "mlir::arith::ArithDialect",
-    "mlir::linalg::LinalgDialect",
-    "mlir::pdl::PDLDialect",
-    "mlir::pdl_interp::PDLInterpDialect",
-    "mlir::scf::SCFDialect",
-    "mlir::tensor::TensorDialect",
-    "mlir::transform::TransformDialect",
-    "IREE::Flow::FlowDialect",
     "IREE::LinalgExt::IREELinalgExtDialect",
-  ];
-  let options = [
-    Option<"disableExpensiveChecks", "disable-expensive-checks", "bool",
-           "false",
-           "Disable expensive checks in the interpreter for a faster run.">,
-    Option<"transformSpecPath", "transform-spec-path", "std::string",
-           /*default=*/"", "File path to the transform spec to use.">,
   ];
 }
 
@@ -251,6 +223,16 @@ def FormScalarDispatchesPass :
     "mlir::linalg::LinalgDialect",
     "mlir::tensor::TensorDialect",
     "IREE::Flow::FlowDialect",
+  ];
+}
+
+def FuseEncodingOpsIntoDispatchRegionsPass :
+    InterfacePass<"iree-dispatch-creation-fuse-encoding-ops-into-dispatch-regions-pass", "mlir::FunctionOpInterface"> {
+  let summary = "Fuses set_encoding ops into producer dispatch regions, or forms new dispatches around them.";
+  let dependentDialects = [
+    "mlir::linalg::LinalgDialect",
+    "IREE::Flow::FlowDialect",
+    "IREE::Encoding::IREEEncodingDialect",
   ];
 }
 

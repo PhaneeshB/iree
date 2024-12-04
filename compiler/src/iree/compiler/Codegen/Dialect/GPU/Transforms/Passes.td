@@ -9,15 +9,10 @@
 
 include "mlir/Pass/PassBase.td"
 
-def DistributeMmaToLanesPass :
-    InterfacePass<"iree-gpu-distribute-mma-to-lanes", "mlir::FunctionOpInterface"> {
-  let summary = "Distributes iree_gpu.multi_mma ops to lanes";
-  let dependentDialects = [
-    "::mlir::arith::ArithDialect",
-    "::mlir::affine::AffineDialect",
-    "::mlir::scf::SCFDialect",
-    "::mlir::tensor::TensorDialect",
-  ];
+def CombineBarrierRegionsPass :
+    Pass<"iree-gpu-combine-barrier-regions", ""> {
+  let summary = "Combines `iree_gpu.barrier_region` ops";
+  let dependentDialects = ["::mlir::iree_compiler::IREE::GPU::IREEGPUDialect"];
 }
 
 def ConcretizeMmaShapesPass :
@@ -37,13 +32,15 @@ def ConcretizeMmaShapesPass :
   ];
 }
 
-def FuseAndHoistParallelLoopsPass :
-    InterfacePass<"iree-gpu-fuse-and-hoist-parallel-loops", "mlir::FunctionOpInterface"> {
-  let summary = "Greedily fuses and hoists parallel loops.";
+def DistributeMmaToLanesPass :
+    InterfacePass<"iree-gpu-distribute-mma-to-lanes", "mlir::FunctionOpInterface"> {
+  let summary = "Distributes iree_gpu.multi_mma ops to lanes";
   let dependentDialects = [
+    "::mlir::arith::ArithDialect",
     "::mlir::affine::AffineDialect",
-    "::mlir::iree_compiler::IREE::GPU::IREEGPUDialect",
-    "::mlir::bufferization::BufferizationDialect"
+    "::mlir::gpu::GPUDialect",
+    "::mlir::scf::SCFDialect",
+    "::mlir::tensor::TensorDialect",
   ];
 }
 
@@ -52,15 +49,6 @@ def LowerIREEGPUOpsPass :
   let summary = "Post bufferization lowerings of iree_gpu ops before late lowerings";
   let dependentDialects = [
     "::mlir::gpu::GPUDialect",
-  ];
-}
-
-def PackToIntrinsicsPass :
-    InterfacePass<"iree-gpu-pack-to-intrinsics", "mlir::FunctionOpInterface"> {
-  let summary = "Packs matmul like operations and converts to iree_gpu.multi_mma";
-  let dependentDialects = [
-    "::mlir::tensor::TensorDialect",
-    "::mlir::iree_compiler::IREE::GPU::IREEGPUDialect"
   ];
 }
 

@@ -21,9 +21,10 @@ namespace {
 using namespace mlir::iree_compiler::IREE::VectorExt;
 using VectorValue = TypedValue<VectorType>;
 
-static LogicalResult isSubgroupLayoutCompatible(
-    IREE::GPU::MMAAttr::SingleSubgroupLayout subgroupLayout,
-    NestedLayoutAttr layout, int64_t dim1, int64_t dim2) {
+static LogicalResult
+isSubgroupLayoutCompatible(IREE::GPU::MMASingleSubgroupLayout subgroupLayout,
+                           NestedLayoutAttr layout, int64_t dim1,
+                           int64_t dim2) {
   SmallVector<int64_t> element = {layout.getElementTile()[dim1],
                                   layout.getElementTile()[dim2]};
   SmallVector<int64_t> thread = {layout.getThreadTile()[dim1],
@@ -49,24 +50,26 @@ static LogicalResult isSubgroupLayoutCompatible(
   return success();
 }
 
-static LogicalResult isIntrinsicLayoutCompatible(VectorContractOpInfo &opInfo,
-                                                 IREE::GPU::MMAAttr intrinsic,
-                                                 NestedLayoutAttr lhsLayout,
-                                                 NestedLayoutAttr rhsLayout,
-                                                 NestedLayoutAttr accLayout) {
+static LogicalResult isIntrinsicLayoutCompatible(
+    VectorContractOpInfo &opInfo, IREE::GPU::MmaInterfaceAttr intrinsic,
+    NestedLayoutAttr lhsLayout, NestedLayoutAttr rhsLayout,
+    NestedLayoutAttr accLayout) {
   auto [lhsM, rhsN] = opInfo.getOperandMNIndex();
   auto [lhsK, rhsK] = opInfo.getOperandKIndex();
   auto [accM, accN] = opInfo.getResultMNIndex();
-  if (failed(isSubgroupLayoutCompatible(intrinsic.getASingleSubgroupLayout(),
-                                        lhsLayout, lhsM, lhsK))) {
+  if (failed(isSubgroupLayoutCompatible(
+          getSingleSubgroupLayout(intrinsic, IREE::GPU::MMAFragment::Lhs),
+          lhsLayout, lhsM, lhsK))) {
     return failure();
   }
-  if (failed(isSubgroupLayoutCompatible(intrinsic.getBSingleSubgroupLayout(),
-                                        rhsLayout, rhsK, rhsN))) {
+  if (failed(isSubgroupLayoutCompatible(
+          getSingleSubgroupLayout(intrinsic, IREE::GPU::MMAFragment::Rhs),
+          rhsLayout, rhsK, rhsN))) {
     return failure();
   }
-  if (failed(isSubgroupLayoutCompatible(intrinsic.getCSingleSubgroupLayout(),
-                                        accLayout, accM, accN))) {
+  if (failed(isSubgroupLayoutCompatible(
+          getSingleSubgroupLayout(intrinsic, IREE::GPU::MMAFragment::Acc),
+          accLayout, accM, accN))) {
     return failure();
   }
   return success();
@@ -123,16 +126,16 @@ struct DistributeContract final : OpDistributionPattern<vector::ContractionOp> {
 
     // We assume there is an decision made before regarding which mfma intrinsic
     // to use and it is attached as an attribute to this contract op.
-    auto mmaAttr =
-        contractOp->getAttrOfType<IREE::GPU::MMAAttr>("iree.amdgpu.mma");
-    if (!mmaAttr) {
+    auto mmaKind = contractOp->getAttrOfType<IREE::GPU::MmaInterfaceAttr>(
+        "iree.amdgpu.mma");
+    if (!mmaKind) {
       return rewriter.notifyMatchFailure(
           contractOp, "missing iree.amdgpu.mma intrinsic attribute");
     }
 
     // Check if the given intrinsic can be distributed with the given
     // layouts.
-    if (failed(isIntrinsicLayoutCompatible(opDetail, mmaAttr, lhsLayout,
+    if (failed(isIntrinsicLayoutCompatible(opDetail, mmaKind, lhsLayout,
                                            rhsLayout, accLayout))) {
       return rewriter.notifyMatchFailure(
           contractOp, "the intrinsic does not match the expected layouts");
@@ -229,7 +232,7 @@ struct DistributeContract final : OpDistributionPattern<vector::ContractionOp> {
         Value rhsSlice =
             rewriter.create<vector::ExtractOp>(loc, rhs, rhsBatchOffsets);
         accSlice =
-            computeMMA(rewriter, loc, mmaAttr, lhsSlice, rhsSlice, accSlice);
+            computeMMA(rewriter, loc, mmaKind, lhsSlice, rhsSlice, accSlice);
       }
       finalTile = rewriter.create<vector::InsertOp>(loc, accSlice, finalTile,
                                                     resultBatchOffsets);
@@ -284,17 +287,18 @@ struct DistributeContract final : OpDistributionPattern<vector::ContractionOp> {
 
   // Generates amdgpu.mfma operation on the given inputs for the given MFMA
   // |intrinsic|.
-  Value computeMMA(OpBuilder &builder, Location loc, IREE::GPU::MMAAttr mmaAttr,
-                   Value a, Value b, Value c) const {
+  Value computeMMA(OpBuilder &builder, Location loc,
+                   IREE::GPU::MmaInterfaceAttr mmaKind, Value a, Value b,
+                   Value c) const {
     // Get the storage vector types that each thread is in charge of.
-    auto [aVectorType, bVectorType, cVectorType] = mmaAttr.getABCVectorTypes();
+    auto [aVectorType, bVectorType, cVectorType] = mmaKind.getABCVectorTypes();
     Value aCast =
         builder.create<vector::ShapeCastOp>(a.getLoc(), aVectorType, a);
     Value bCast =
         builder.create<vector::ShapeCastOp>(b.getLoc(), bVectorType, b);
     Value cCast =
         builder.create<vector::ShapeCastOp>(c.getLoc(), cVectorType, c);
-    FailureOr<Value> mmaOp = mmaAttr.buildMmaOperation(
+    FailureOr<Value> mmaOp = mmaKind.buildMmaOperation(
         builder, loc, cVectorType, aCast, bCast, cCast);
     assert(succeeded(mmaOp) && "Failed to construct mma op");
     return builder.create<vector::ShapeCastOp>(c.getLoc(), c.getType(), *mmaOp);

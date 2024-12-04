@@ -1137,6 +1137,7 @@ def VM_RodataOp : VM_Op<"rodata", [
 }
 
 def VM_ConstRefRodataOp : VM_PureOp<"const.ref.rodata", [
+    DeclareOpInterfaceMethods<SymbolUserOpInterface>,
     DeclareOpInterfaceMethods<VM_SerializableOpInterface>,
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>
   ]> {
@@ -1170,8 +1171,6 @@ def VM_ConstRefRodataOp : VM_PureOp<"const.ref.rodata", [
     OpBuilder<(ins "RodataOp":$rodataOp,
       CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)>,
   ];
-
-  let hasVerifier = 1;
 }
 
 def VM_RodataInlineOp : VM_PureOp<"rodata.inline", [
@@ -3178,14 +3177,28 @@ def VM_CastUI64F64Op :
 def VM_CastF32SI32Op :
     VM_ConversionOp<F32, I32, "cast.f32.si32", VM_OPC_CastF32SI32,
                     [VM_ExtF32]> {
-  let summary = [{cast from a float-point value to a signed integer}];
+  let summary = [{cast from a float-point value to a signed 32-bit integer}];
+  let hasFolder = 1;
+}
+
+def VM_CastF32SI64Op :
+    VM_ConversionOp<F32, I64, "cast.f32.si64", VM_OPC_CastF32SI64,
+                    [VM_ExtF32]> {
+  let summary = [{cast from a float-point value to a signed 64-bit integer}];
   let hasFolder = 1;
 }
 
 def VM_CastF32UI32Op :
     VM_ConversionOp<F32, I32, "cast.f32.ui32", VM_OPC_CastF32UI32,
                     [VM_ExtF32]> {
-  let summary = [{cast from an float-point value to an unsigned integer}];
+  let summary = [{cast from an float-point value to an unsigned 32-bit integer}];
+  let hasFolder = 1;
+}
+
+def VM_CastF32UI64Op :
+    VM_ConversionOp<F32, I64, "cast.f32.ui64", VM_OPC_CastF32UI64,
+                    [VM_ExtF32]> {
+  let summary = [{cast from an float-point value to an unsigned 64-bit integer}];
   let hasFolder = 1;
 }
 

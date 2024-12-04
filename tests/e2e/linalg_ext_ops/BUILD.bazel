@@ -29,6 +29,7 @@ ALL_SRCS = enforce_glob(
 iree_check_single_backend_test_suite(
     name = "check_llvm-cpu_local-task",
     srcs = ALL_SRCS,
+    compiler_flags = ["--iree-llvmcpu-target-cpu=generic"],
     driver = "local-task",
     tags = [
         # attention fails with a wasm target, just disable all tests there for now
@@ -92,9 +93,26 @@ iree_check_single_backend_test_suite(
     target_backend = "cuda",
 )
 
+# TODO(#18649): Add back top-k.mlir test once MI250 correctness is resolved.
+ROCM_HIP_SRCS = enforce_glob(
+    # keep sorted
+    [
+        "scan.mlir",
+        "scatter.mlir",
+        "sort.mlir",
+        "winograd_input.mlir",
+        "winograd_output.mlir",
+    ],
+    include = ["*.mlir"],
+    exclude = [
+        "top-k.mlir",
+        "attention.mlir",
+    ],
+)
+
 iree_check_single_backend_test_suite(
     name = "check_rocm_hip",
-    srcs = LLVM_GPU_SRCS,
+    srcs = ROCM_HIP_SRCS,
     driver = "hip",
     target_backend = "rocm",
 )

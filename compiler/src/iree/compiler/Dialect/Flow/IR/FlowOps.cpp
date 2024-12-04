@@ -578,6 +578,25 @@ ValueRange DispatchRegionOp::getResultDynamicDims(unsigned idx) {
                                shapedType ? shapedType.getNumDynamicDims() : 0);
 }
 
+LogicalResult DispatchRegionOp::reifyResultShapes(
+    OpBuilder &b, ReifiedRankedShapedTypeDims &reifiedReturnShapes) {
+  SmallVector<Type> resultTypes(getResultTypes());
+  unsigned counter = 0;
+  for (Type resultType : resultTypes) {
+    auto shapedType = llvm::dyn_cast<ShapedType>(resultType);
+    if (!shapedType) {
+      reifiedReturnShapes.push_back({});
+      continue;
+    }
+    SmallVector<Value> dynamicDims =
+        getResultDims().slice(counter, shapedType.getNumDynamicDims());
+    reifiedReturnShapes.push_back(
+        mlir::getMixedValues(shapedType.getShape(), dynamicDims, b));
+    counter += shapedType.getNumDynamicDims();
+  }
+  return success();
+}
+
 /// Canonicalizes a DispatchRegionOp: Drop all unused results. Returns `true`
 /// if the IR was modified.
 bool dropUnusedDispatchRegionResults(RewriterBase &rewriter,
@@ -1326,6 +1345,27 @@ LogicalResult verifyDispatchWorkgroupInfoOp(Operation *op, uint64_t dimension) {
            << " out of bounds of dispatch dimensions; expected [0, 3)";
   }
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// flow.dispatch.workload.ordinal
+//===----------------------------------------------------------------------===//
+
+void DispatchWorkloadOrdinalOp::inferResultDivisibility(
+    ArrayRef<IREE::Util::IntegerDivisibility> argDivs,
+    IREE::Util::SetIntDivisibilityFn setResultDivisibility) {
+  if (argDivs[0].isUninitialized()) {
+    setResultDivisibility(getResult(),
+                          IREE::Util::ConstantIntDivisibility(1, 1));
+    return;
+  }
+  setResultDivisibility(getResult(), argDivs[0].getValue());
+}
+
+void DispatchWorkloadOrdinalOp::inferResultRanges(
+    ArrayRef<ConstantIntRanges> argRanges, SetIntRangeFn setResultRange) {
+  assert(!argRanges.empty() && "expected range of input to be set");
+  setResultRange(getResult(), argRanges[0]);
 }
 
 //===----------------------------------------------------------------------===//

@@ -16,7 +16,7 @@ def IREEGPU_MmaInterfaceAttr : AttrInterface<"MmaInterfaceAttr"> {
 
   let description = [{
     Interface used to query information needed to generate code targeting a
-    specific Matrix Multiply–Accumulate (MMA) machine intrinsic instruction.
+    specific Matrix Multiply-Accumulate (MMA) machine intrinsic instruction.
     Layout information can be explicit or opaque, however all such attributes
     must specify the static shape of the operation and the required element
     types.
@@ -129,8 +129,8 @@ def IREEGPU_MmaInterfaceAttr : AttrInterface<"MmaInterfaceAttr"> {
     >,
     InterfaceMethod<
       /*desc=*/[{
-        Constructs the offsets/sizes/strides for extracting the per-thread
-        slice of the given operand fragment.
+        Populates the reassociation indices and result shape to materialize the
+        thread layout shape from the subgroup block shape.
       }],
       /*retTy=*/"::mlir::LogicalResult",
       /*methodName=*/"materializeOperandConcreteShape",
@@ -142,6 +142,19 @@ def IREEGPU_MmaInterfaceAttr : AttrInterface<"MmaInterfaceAttr"> {
         "::llvm::SmallVector<::mlir::SmallVector<int64_t, 2>>&":$reassociations,
         "::mlir::RankedTensorType&":$result_type
       ),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/[{
+        return failure();
+      }]
+    >,
+    InterfaceMethod<
+      /*desc=*/[{
+        Returns the scope of the MMA operation. See IREEGPUEnums.td for
+        available options.
+      }],
+      /*retTy=*/"::mlir::FailureOr<::mlir::iree_compiler::IREE::GPU::MMAScope>",
+      /*methodName=*/"getMmaScope",
+      /*args=*/(ins),
       /*methodBody=*/"",
       /*defaultImplementation=*/[{
         return failure();

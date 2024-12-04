@@ -23,6 +23,7 @@ iree_cc_library(
     MLIRBuiltinToLLVMIRTranslation
     MLIRBytecodeWriter
     MLIRCAPIIR
+    MLIRDebug
     MLIRIR
     MLIRParser
     MLIRSupport
@@ -79,7 +80,9 @@ iree_cc_library(
     MLIRPass
     MLIRSupport
     iree::compiler::Dialect::HAL::Target
+    iree::compiler::Dialect::VM::Target::init_targets
     iree::compiler::PluginAPI::PluginManager
+    iree::compiler::Tools::init_llvmir_translations
     iree::compiler::Tools::init_passes_and_dialects
     iree::compiler::bindings::c::headers
   PUBLIC
@@ -99,6 +102,35 @@ iree_cc_library(
     MLIRSupport
     iree::compiler::Reducer::iree_reduce_lib
     iree::compiler::Tools::init_passes_and_dialects
+    iree::compiler::bindings::c::headers
+  PUBLIC
+)
+
+iree_cc_library(
+  NAME
+    IREECodegenDialectCAPI
+  SRCS
+    "IREECodegenDialectCAPI.cpp"
+  DEPS
+    IREELLVMIncludeSetup
+    MLIRCAPIIR
+    MLIRIR
+    iree::compiler::Codegen::Dialect::Codegen::IR::IREECodegenDialect
+    iree::compiler::Codegen::Utils
+    iree::compiler::bindings::c::headers
+  PUBLIC
+)
+
+iree_cc_library(
+  NAME
+    IREEGPUDialectCAPI
+  SRCS
+    "IREEGPUDialectCAPI.cpp"
+  DEPS
+    IREELLVMIncludeSetup
+    MLIRCAPIIR
+    MLIRIR
+    iree::compiler::Codegen::Dialect::GPU::IR::IREEGPUDialect
     iree::compiler::bindings::c::headers
   PUBLIC
 )

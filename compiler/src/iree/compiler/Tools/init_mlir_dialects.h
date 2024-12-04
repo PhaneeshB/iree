@@ -29,6 +29,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/TransformOps/GPUTransformOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/TransformOps/DialectExtension.h"
@@ -40,7 +41,7 @@
 #include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
-#include "mlir/Dialect/Quant/QuantOps.h"
+#include "mlir/Dialect/Quant/IR/Quant.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/TransformOps/SCFTransformOps.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
@@ -81,7 +82,8 @@ inline void registerMlirDialects(DialectRegistry &registry) {
                   pdl::PDLDialect,
                   pdl_interp::PDLInterpDialect,
                   scf::SCFDialect,
-                  quant::QuantizationDialect,
+                  quant::QuantDialect,
+                  ROCDL::ROCDLDialect,
                   spirv::SPIRVDialect,
                   arm_neon::ArmNeonDialect,
                   arm_sve::ArmSVEDialect,

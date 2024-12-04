@@ -8,7 +8,6 @@
 #include "iree/compiler/Dialect/Util/Conversion/MemRefToUtil/Patterns.h"
 #include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
-#include "iree/compiler/Dialect/Util/Transforms/PassDetail.h"
 #include "iree/compiler/Dialect/Util/Transforms/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
@@ -18,25 +17,21 @@
 
 namespace mlir::iree_compiler::IREE::Util {
 
+#define GEN_PASS_DEF_TESTCONVERSIONPASS
+#include "iree/compiler/Dialect/Util/Transforms/Passes.h.inc"
+
 namespace {
 
-static std::optional<Value> buildUnrealizedConversionCastOp(OpBuilder &builder,
-                                                            Type toType,
-                                                            ValueRange inputs,
-                                                            Location loc) {
+static Value buildUnrealizedConversionCastOp(OpBuilder &builder, Type toType,
+                                             ValueRange inputs, Location loc) {
   return builder.create<UnrealizedConversionCastOp>(loc, toType, inputs)
       .getResult(0);
 }
 
-class TestConversionPass : public TestConversionBase<TestConversionPass> {
+class TestConversionPass
+    : public impl::TestConversionPassBase<TestConversionPass> {
 public:
-  TestConversionPass() = default;
-  TestConversionPass(const TestConversionPass &) {}
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<IREE::Util::UtilDialect, mlir::arith::ArithDialect,
-                    math::MathDialect, mlir::affine::AffineDialect,
-                    memref::MemRefDialect>();
-  }
+  using Base::Base;
 
   void runOnOperation() override {
     auto *context = &getContext();
@@ -74,16 +69,8 @@ public:
       return signalPassFailure();
     }
   }
-
-  Option<bool> widenIntegers{
-      *this, "widen-integers",
-      llvm::cl::desc("Tests type conversion by widening integers to i32")};
 };
 
 } // namespace
-
-std::unique_ptr<OperationPass<ModuleOp>> createTestConversionPass() {
-  return std::make_unique<TestConversionPass>();
-}
 
 } // namespace mlir::iree_compiler::IREE::Util

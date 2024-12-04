@@ -6,6 +6,8 @@
 
 #include "iree/compiler/ExternalInterfaces/UtilExternalModels.h"
 
+#include "iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUDialect.h"
+#include "iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUOps.h"
 #include "iree/compiler/Dialect/Encoding/IR/EncodingDialect.h"
 #include "iree/compiler/Dialect/Encoding/IR/EncodingOps.h"
 #include "iree/compiler/Dialect/LinalgExt/IR/LinalgExtDialect.h"
@@ -15,10 +17,92 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MLProgram/IR/MLProgram.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/Matchers.h"
 
 namespace mlir::iree_compiler {
 
 namespace {
+
+//===----------------------------------------------------------------------===//
+// InferIntDivisibilityOpInterface
+//===----------------------------------------------------------------------===//
+
+static IREE::Util::ConstantIntDivisibility
+getDivisibilityOfOperand(Value v,
+                         IREE::Util::IntegerDivisibility divisibility) {
+  if (!divisibility.isUninitialized()) {
+    return divisibility.getValue();
+  }
+  APInt intVal;
+  if (matchPattern(v, m_ConstantInt(&intVal))) {
+    uint64_t udiv = intVal.getZExtValue();
+    uint64_t sdiv = std::abs(intVal.getSExtValue());
+    return IREE::Util::ConstantIntDivisibility(udiv, sdiv);
+  }
+  return IREE::Util::ConstantIntDivisibility(1, 1);
+}
+
+struct ArithConstantInferIntDivisibilityOpInterface
+    : public IREE::Util::InferIntDivisibilityOpInterface::ExternalModel<
+          ArithConstantInferIntDivisibilityOpInterface, arith::ConstantOp> {
+
+  void inferResultDivisibility(
+      Operation *op, ArrayRef<IREE::Util::IntegerDivisibility> argDivs,
+      IREE::Util::SetIntDivisibilityFn setResultDivs) const {
+    auto constOp = cast<arith::ConstantOp>(op);
+    auto constAttr = llvm::dyn_cast_or_null<IntegerAttr>(constOp.getValue());
+    if (constAttr) {
+      const APInt &value = constAttr.getValue();
+      uint64_t udiv = value.getZExtValue();
+      uint64_t sdiv = std::abs(value.getSExtValue());
+      setResultDivs(constOp.getResult(),
+                    IREE::Util::ConstantIntDivisibility(udiv, sdiv));
+    }
+  }
+};
+
+struct ArithMulIInferIntDivisibilityOpInterface
+    : public IREE::Util::InferIntDivisibilityOpInterface::ExternalModel<
+          ArithMulIInferIntDivisibilityOpInterface, arith::MulIOp> {
+
+  void inferResultDivisibility(
+      Operation *op, ArrayRef<IREE::Util::IntegerDivisibility> argDivs,
+      IREE::Util::SetIntDivisibilityFn setResultDivs) const {
+    auto mulOp = cast<arith::MulIOp>(op);
+
+    auto lhsDivisibility = getDivisibilityOfOperand(mulOp.getLhs(), argDivs[0]);
+    auto rhsDivisibility = getDivisibilityOfOperand(mulOp.getRhs(), argDivs[1]);
+
+    uint64_t mulUDiv = lhsDivisibility.udiv() * rhsDivisibility.udiv();
+    uint64_t mulSDiv = lhsDivisibility.sdiv() * rhsDivisibility.sdiv();
+
+    setResultDivs(mulOp.getResult(),
+                  IREE::Util::ConstantIntDivisibility(mulUDiv, mulSDiv));
+  }
+};
+
+struct ArithDivUIInferIntDivisibilityOpInterface
+    : public IREE::Util::InferIntDivisibilityOpInterface::ExternalModel<
+          ArithDivUIInferIntDivisibilityOpInterface, arith::DivUIOp> {
+
+  void inferResultDivisibility(
+      Operation *op, ArrayRef<IREE::Util::IntegerDivisibility> argDivs,
+      IREE::Util::SetIntDivisibilityFn setResultDivs) const {
+    auto divOp = cast<arith::DivUIOp>(op);
+
+    APInt intVal;
+    if (!matchPattern(divOp.getRhs(), m_ConstantInt(&intVal))) {
+      return;
+    }
+
+    auto lhsDivisibility = getDivisibilityOfOperand(divOp.getLhs(), argDivs[0]);
+
+    uint64_t divUDiv = lhsDivisibility.udiv() / intVal.getZExtValue();
+    uint64_t divSDiv = lhsDivisibility.sdiv() / std::abs(intVal.getSExtValue());
+
+    setResultDivs(divOp, IREE::Util::ConstantIntDivisibility(divUDiv, divSDiv));
+  }
+};
 
 //===----------------------------------------------------------------------===//
 // GlobalOpInterface
@@ -168,6 +252,27 @@ struct LinalgOpTiedOpInterfaceHelper {
   }
 };
 
+// TODO(Max191): Remove this interface once GPU data tiling stops using early
+// materialization. This only exists for handling multi_mma ops before dispatch
+// workgroups are created, which only happens with early materialization.
+struct MultiMmaOpTiedOpInterface
+    : public IREE::Util::TiedOpInterface::ExternalModel<
+          MultiMmaOpTiedOpInterface, IREE::GPU::MultiMmaOp> {
+  Value getTiedResult(Operation *op, unsigned resultIndex) const {
+    auto linalgOp = cast<IREE::GPU::MultiMmaOp>(op);
+    return IREE::Util::TiedOpInterface::findTiedBaseValue(linalgOp.getAcc());
+  }
+
+  ::std::optional<unsigned>
+  getTiedResultOperandIndex(Operation *op, unsigned resultIndex) const {
+    return {2}; // acc
+  }
+
+  SmallVector<int64_t> getTiedResultOperandIndices(Operation *op) const {
+    return {2}; // acc
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // HoistableOpInterface
 //===----------------------------------------------------------------------===//
@@ -200,10 +305,13 @@ struct HoistableLinalgOpInterface
     : public IREE::Util::HoistableOpInterface::ExternalModel<
           HoistableLinalgOpInterface<OpTy>, OpTy> {
   bool isHoistableOp(Operation *) const { return true; }
+
+  /// FillOp and broadcasting ops are not hoistableLeaf ops, since it is
+  /// typically better to fuse them with their consumers.
   bool isHoistableLeafOp(Operation *op) const {
     auto genericOp = llvm::dyn_cast<linalg::GenericOp>(op);
     if (!genericOp)
-      return true;
+      return !isa<linalg::FillOp>(op);
     // Generally, we prefer to not hoist broadcasts.
     // Detect op that only broadcast input as fusing them makes the new
     // op cheaper.
@@ -217,14 +325,10 @@ struct HoistableLinalgOpInterface
         }
       }
     }
-    return true;
+    return !linalg::isaFillOpInterface(genericOp).has_value();
   }
   bool isAtomicallyHoistableOp(Operation *) const { return true; }
-  bool isOperandHoistable(Operation *op, OpOperand *operand) const {
-    linalg::LinalgOp linalgOp = llvm::cast<linalg::LinalgOp>(op);
-    // For linalg ops, we only want to hoist inputs.
-    return operand->getOperandNumber() < linalgOp.getNumDpsInputs();
-  }
+  bool isOperandHoistable(Operation *, OpOperand *) const { return true; }
 };
 
 /// Helper structures that iterates over all Op types in `OpTys` and registers
@@ -281,6 +385,12 @@ void registerUtilExternalModels(DialectRegistry &registry) {
         arith::BitcastOp, arith::ExtFOp, arith::ExtUIOp, arith::ExtSIOp,
         arith::FPToSIOp, arith::FPToUIOp, arith::IndexCastOp, arith::TruncFOp,
         arith::TruncIOp, arith::SIToFPOp, arith::UIToFPOp>(context);
+    arith::ConstantOp::attachInterface<
+        ArithConstantInferIntDivisibilityOpInterface>(*context);
+    arith::MulIOp::attachInterface<ArithMulIInferIntDivisibilityOpInterface>(
+        *context);
+    arith::DivUIOp::attachInterface<ArithDivUIInferIntDivisibilityOpInterface>(
+        *context);
   });
 
   registry.addExtension(
@@ -288,6 +398,11 @@ void registerUtilExternalModels(DialectRegistry &registry) {
         tensor::InsertSliceOp::attachInterface<InsertSliceOpTiedOpInterface>(
             *context);
       });
+
+  registry.addExtension(+[](MLIRContext *context,
+                            IREE::GPU::IREEGPUDialect *dialect) {
+    IREE::GPU::MultiMmaOp::attachInterface<MultiMmaOpTiedOpInterface>(*context);
+  });
 
   registry.addExtension(
       +[](MLIRContext *context, linalg::LinalgDialect *dialect) {
@@ -366,8 +481,8 @@ void registerUtilExternalModels(DialectRegistry &registry) {
         // Never hoist empty and other pure metadata ops as a leaf. It's fine to
         // hoist them as a part of a larger constant tree that does actual work.
         HoistableNonLeafOpInterfaceHelper<
-            tensor::EmptyOp, tensor::ExpandShapeOp,
-            tensor::CollapseShapeOp>::registerOpInterface(context);
+            tensor::EmptyOp, tensor::ExpandShapeOp, tensor::CollapseShapeOp,
+            tensor::ExtractSliceOp>::registerOpInterface(context);
         // Cases of trivial pack/unpack should be handled as canonicalizations
         // before we get here, thus we're safe to always hoist.
         AlwaysHoistableOpInterfaceHelper<

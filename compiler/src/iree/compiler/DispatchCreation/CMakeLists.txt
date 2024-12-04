@@ -24,11 +24,11 @@ iree_cc_library(
     "CollapseReductionDimensions.cpp"
     "ConvertDispatchRegionsToWorkgroups.cpp"
     "ConvertTensorToFlow.cpp"
-    "DispatchWithTransformDialect.cpp"
     "ElementwiseOpFusion.cpp"
     "FoldUnitExtentDims.cpp"
     "FormDispatchRegions.cpp"
     "FormScalarDispatches.cpp"
+    "FuseEncodingOpsIntoDispatchRegions.cpp"
     "FuseHorizontalContractions.cpp"
     "FuseMultiUseElementwiseProducer.cpp"
     "FusionPreprocessing.cpp"
@@ -68,6 +68,7 @@ iree_cc_library(
     MLIRPass
     MLIRSCFDialect
     MLIRSCFTransforms
+    MLIRSideEffectInterfaces
     MLIRSupport
     MLIRTensorDialect
     MLIRTensorTransforms

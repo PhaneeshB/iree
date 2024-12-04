@@ -50,7 +50,7 @@ int32_t iree_test_utils_max_elements_to_check(void) {
   return FLAG_max_elements_to_check;
 }
 
-const char* iree_test_utils_emoji(bool good) { return good ? "🦄" : "🐞"; }
+const char* iree_test_utils_emoji(bool good) { return good ? "🦄" : "🎃"; }
 
 int iree_test_utils_calculate_check_every(iree_hal_dim_t tot_elements,
                                           iree_hal_dim_t no_div_of) {
@@ -93,6 +93,36 @@ iree_test_utils_e2e_value_t iree_test_utils_value_make_i32(int32_t value) {
   return result;
 }
 
+iree_test_utils_e2e_value_t iree_test_utils_value_make_f8E5M2(uint8_t value) {
+  iree_test_utils_e2e_value_t result;
+  result.type = IREE_TEST_UTILS_VALUE_TYPE_F8E5M2;
+  result.f8_u8 = value;
+  return result;
+}
+
+iree_test_utils_e2e_value_t iree_test_utils_value_make_f8E4M3(uint8_t value) {
+  iree_test_utils_e2e_value_t result;
+  result.type = IREE_TEST_UTILS_VALUE_TYPE_F8E4M3;
+  result.f8_u8 = value;
+  return result;
+}
+
+iree_test_utils_e2e_value_t iree_test_utils_value_make_f8E5M2FNUZ(
+    uint16_t value) {
+  iree_test_utils_e2e_value_t result;
+  result.type = IREE_TEST_UTILS_VALUE_TYPE_F8E5M2FNUZ;
+  result.f8_u8 = value;
+  return result;
+}
+
+iree_test_utils_e2e_value_t iree_test_utils_value_make_f8E4M3FNUZ(
+    uint16_t value) {
+  iree_test_utils_e2e_value_t result;
+  result.type = IREE_TEST_UTILS_VALUE_TYPE_F8E4M3FNUZ;
+  result.f8_u8 = value;
+  return result;
+}
+
 iree_test_utils_e2e_value_t iree_test_utils_value_make_f16(uint16_t value) {
   iree_test_utils_e2e_value_t result;
   result.type = IREE_TEST_UTILS_VALUE_TYPE_F16;
@@ -114,6 +144,13 @@ iree_test_utils_e2e_value_t iree_test_utils_value_make_f32(float value) {
   return result;
 }
 
+iree_test_utils_e2e_value_t iree_test_utils_value_make_f64(float value) {
+  iree_test_utils_e2e_value_t result;
+  result.type = IREE_TEST_UTILS_VALUE_TYPE_F64;
+  result.f64 = value;
+  return result;
+}
+
 iree_test_utils_e2e_value_t iree_test_utils_read_buffer_element(
     iree_hal_dim_t index, iree_hal_element_type_t result_type,
     const void* data) {
@@ -123,21 +160,35 @@ iree_test_utils_e2e_value_t iree_test_utils_read_buffer_element(
     return iree_test_utils_value_make_i16(((int16_t*)data)[index]);
   } else if (iree_hal_element_type_is_integer(result_type, 32)) {
     return iree_test_utils_value_make_i32(((int32_t*)data)[index]);
+  } else if (result_type == IREE_HAL_ELEMENT_TYPE_FLOAT_8_E5M2) {
+    return iree_test_utils_value_make_f8E5M2(((uint8_t*)data)[index]);
+  } else if (result_type == IREE_HAL_ELEMENT_TYPE_FLOAT_8_E4M3) {
+    return iree_test_utils_value_make_f8E4M3(((uint8_t*)data)[index]);
+  } else if (result_type == IREE_HAL_ELEMENT_TYPE_FLOAT_8_E5M2_FNUZ) {
+    return iree_test_utils_value_make_f8E5M2FNUZ(((uint8_t*)data)[index]);
+  } else if (result_type == IREE_HAL_ELEMENT_TYPE_FLOAT_8_E4M3_FNUZ) {
+    return iree_test_utils_value_make_f8E4M3FNUZ(((uint8_t*)data)[index]);
   } else if (result_type == IREE_HAL_ELEMENT_TYPE_FLOAT_16) {
     return iree_test_utils_value_make_f16(((uint16_t*)data)[index]);
   } else if (result_type == IREE_HAL_ELEMENT_TYPE_BFLOAT_16) {
     return iree_test_utils_value_make_bf16(((uint16_t*)data)[index]);
   } else if (result_type == IREE_HAL_ELEMENT_TYPE_FLOAT_32) {
     return iree_test_utils_value_make_f32(((float*)data)[index]);
+  } else if (result_type == IREE_HAL_ELEMENT_TYPE_FLOAT_64) {
+    return iree_test_utils_value_make_f64(((double*)data)[index]);
   }
   iree_status_abort(iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
                                      "unhandled matmul result type"));
   return iree_test_utils_value_make_none();
 }
 
+// Important: print all floating point values to FULL precision.
+// The audience is debugging low-level numerical bugs.
+// Since the values used in most tests are small and integral, these will
+// normally print just as concisely, while the extra precision requested here
+// will only kick in when it's needed, when there is a numerical bug.
 int iree_test_utils_snprintf_value(char* buf, size_t bufsize,
-                                   iree_test_utils_e2e_value_t value,
-                                   precision_t precision) {
+                                   iree_test_utils_e2e_value_t value) {
   switch (value.type) {
     case IREE_TEST_UTILS_VALUE_TYPE_I8:
       return snprintf(buf, bufsize, "%" PRIi8, value.i8);
@@ -147,21 +198,28 @@ int iree_test_utils_snprintf_value(char* buf, size_t bufsize,
       return snprintf(buf, bufsize, "%" PRIi32, value.i32);
     case IREE_TEST_UTILS_VALUE_TYPE_I64:
       return snprintf(buf, bufsize, "%" PRIi64, value.i64);
+    case IREE_TEST_UTILS_VALUE_TYPE_F8E5M2:
+      return snprintf(buf, bufsize, "%.3g",
+                      iree_math_f8e5m2_to_f32(value.f8_u8));
+    case IREE_TEST_UTILS_VALUE_TYPE_F8E4M3:
+      return snprintf(buf, bufsize, "%.3g",
+                      iree_math_f8e4m3_to_f32(value.f8_u8));
+    case IREE_TEST_UTILS_VALUE_TYPE_F8E5M2FNUZ:
+      return snprintf(buf, bufsize, "%.3g",
+                      iree_math_f8e5m2fnuz_to_f32(value.f8_u8));
+    case IREE_TEST_UTILS_VALUE_TYPE_F8E4M3FNUZ:
+      return snprintf(buf, bufsize, "%.3g",
+                      iree_math_f8e4m3fnuz_to_f32(value.f8_u8));
     case IREE_TEST_UTILS_VALUE_TYPE_F16:
-      return snprintf(buf, bufsize,
-                      precision == PRECISION_HIGH ? "%.5g" : "%.4g",
+      return snprintf(buf, bufsize, "%.5g",
                       iree_math_f16_to_f32(value.f16_u16));
     case IREE_TEST_UTILS_VALUE_TYPE_BF16:
-      return snprintf(buf, bufsize,
-                      precision == PRECISION_HIGH ? "%.5g" : "%.4g",
+      return snprintf(buf, bufsize, "%.5g",
                       iree_math_bf16_to_f32(value.bf16_u16));
     case IREE_TEST_UTILS_VALUE_TYPE_F32:
-      return snprintf(buf, bufsize,
-                      precision == PRECISION_HIGH ? "%.8g" : "%.4g", value.f32);
+      return snprintf(buf, bufsize, "%.8g", value.f32);
     case IREE_TEST_UTILS_VALUE_TYPE_F64:
-      return snprintf(buf, bufsize,
-                      precision == PRECISION_HIGH ? "%.16g" : "%.4g",
-                      value.f64);
+      return snprintf(buf, bufsize, "%.16g", value.f64);
     default:
       iree_status_abort(iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
                                          "unhandled value type"));
@@ -198,16 +256,31 @@ bool iree_test_utils_result_elements_agree(iree_test_utils_e2e_value_t expected,
       return fabsf(iree_math_f16_to_f32(actual.f16_u16) -
                    iree_math_f16_to_f32(expected.f16_u16)) <
              acceptable_fp_delta;
-    case IREE_TEST_UTILS_VALUE_TYPE_BF16:
+    case IREE_TEST_UTILS_VALUE_TYPE_BF16: {
       if (actual.bf16_u16 == expected.bf16_u16) return true;
+      // This is the rare case where the accumulator itself (not just LHS/RHS)
+      // is bf16. This doesn't really happen in practice and is mostly just in
+      // some CPU tests for completeness. Accumulators grow outside of the
+      // narrow range of bf16 exact representation of integers, forcing fuzzy
+      // compares.
+      float actual_f32 = iree_math_bf16_to_f32(actual.bf16_u16);
+      float expected_f32 = iree_math_bf16_to_f32(expected.bf16_u16);
+      if (fabsf(actual_f32) > 127.0f || fabsf(expected_f32) > 127.0f) {
+        if (fabsf(actual_f32 - expected_f32) < 10.0f) {
+          return true;
+        }
+      }
       if (iree_test_utils_require_exact_results()) return false;
-      return fabsf(iree_math_bf16_to_f32(actual.bf16_u16) -
-                   iree_math_bf16_to_f32(expected.bf16_u16)) <
-             acceptable_fp_delta;
+      return fabsf(actual_f32 - expected_f32) < acceptable_fp_delta;
+    }
     case IREE_TEST_UTILS_VALUE_TYPE_F32:
       if (actual.f32 == expected.f32) return true;
       if (iree_test_utils_require_exact_results()) return false;
       return fabsf(actual.f32 - expected.f32) < acceptable_fp_delta;
+    case IREE_TEST_UTILS_VALUE_TYPE_F64:
+      if (actual.f64 == expected.f64) return true;
+      if (iree_test_utils_require_exact_results()) return false;
+      return fabs(actual.f64 - expected.f64) < acceptable_fp_delta;
     default:
       iree_status_abort(iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
                                          "unhandled value type"));
@@ -245,6 +318,18 @@ void iree_test_utils_write_element(iree_hal_element_type_t element_type,
       break;
     case IREE_HAL_ELEMENT_TYPE_BFLOAT_16:
       *(uint16_t*)dst = iree_math_f32_to_bf16((float)value);
+      break;
+    case IREE_HAL_ELEMENT_TYPE_FLOAT_8_E5M2:
+      *(uint8_t*)dst = iree_math_f32_to_f8e5m2((float)value);
+      break;
+    case IREE_HAL_ELEMENT_TYPE_FLOAT_8_E4M3:
+      *(uint8_t*)dst = iree_math_f32_to_f8e4m3((float)value);
+      break;
+    case IREE_HAL_ELEMENT_TYPE_FLOAT_8_E5M2_FNUZ:
+      *(uint8_t*)dst = iree_math_f32_to_f8e5m2fnuz((float)value);
+      break;
+    case IREE_HAL_ELEMENT_TYPE_FLOAT_8_E4M3_FNUZ:
+      *(uint8_t*)dst = iree_math_f32_to_f8e4m3fnuz((float)value);
       break;
     WRITE_ELEMENT_CASE(FLOAT_32, float)
     WRITE_ELEMENT_CASE(FLOAT_64, double)
@@ -285,6 +370,10 @@ void iree_test_utils_get_min_max_for_element_type(
       *max = +4;
       break;
     case IREE_HAL_ELEMENT_TYPE_BFLOAT_16:
+    case IREE_HAL_ELEMENT_TYPE_FLOAT_8_E5M2:
+    case IREE_HAL_ELEMENT_TYPE_FLOAT_8_E4M3:
+    case IREE_HAL_ELEMENT_TYPE_FLOAT_8_E5M2_FNUZ:
+    case IREE_HAL_ELEMENT_TYPE_FLOAT_8_E4M3_FNUZ:
       *min = -2;
       *max = +2;
       break;
@@ -306,7 +395,7 @@ void iree_test_utils_get_min_max_for_element_type(
     case IREE_HAL_ELEMENT_TYPE_SINT_64:
     case IREE_HAL_ELEMENT_TYPE_FLOAT_64:
       *min = -16;
-      *min = +16;
+      *max = +16;
       break;
     case IREE_HAL_ELEMENT_TYPE_UINT_64:
       *min = 0;

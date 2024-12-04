@@ -143,7 +143,7 @@ ExecutableLibraryDI::getPtrOf(LLVM::DITypeAttr typeAttr) {
 LLVM::DICompositeTypeAttr
 ExecutableLibraryDI::getArrayOf(LLVM::DITypeAttr typeAttr, int64_t count) {
   return LLVM::DICompositeTypeAttr::get(
-      builder.getContext(), llvm::dwarf::DW_TAG_array_type, /*recId=*/{},
+      builder.getContext(), llvm::dwarf::DW_TAG_array_type,
       /*name=*/builder.getStringAttr(""), fileAttr,
       /*line=*/227, fileAttr,
       /*baseType=*/typeAttr, LLVM::DIFlags::Zero,
@@ -221,7 +221,7 @@ LLVM::DITypeAttr ExecutableLibraryDI::getBasicType(Type type) {
 LLVM::DICompositeTypeAttr ExecutableLibraryDI::getProcessorV0T() {
   unsigned offsetInBits = 0;
   return LLVM::DICompositeTypeAttr::get(
-      builder.getContext(), llvm::dwarf::DW_TAG_structure_type, /*recId=*/{},
+      builder.getContext(), llvm::dwarf::DW_TAG_structure_type,
       builder.getStringAttr("iree_hal_processor_v0_t"), fileAttr,
       /*line=*/227, fileAttr,
       /*baseType=*/nullptr, LLVM::DIFlags::Zero, /*sizeInBits=*/512,
@@ -239,7 +239,6 @@ LLVM::DIDerivedTypeAttr ExecutableLibraryDI::getEnvironmentV0T() {
       "iree_hal_executable_environment_v0_t",
       LLVM::DICompositeTypeAttr::get(
           builder.getContext(), llvm::dwarf::DW_TAG_structure_type,
-          /*recId=*/{},
           builder.getStringAttr("iree_hal_executable_environment_v0_t"),
           fileAttr,
           /*line=*/246, fileAttr,
@@ -268,7 +267,6 @@ LLVM::DIDerivedTypeAttr ExecutableLibraryDI::getDispatchStateV0T() {
       "iree_hal_executable_dispatch_state_v0_t",
       LLVM::DICompositeTypeAttr::get(
           builder.getContext(), llvm::dwarf::DW_TAG_structure_type,
-          /*recId=*/{},
           builder.getStringAttr("iree_hal_executable_dispatch_state_v0_t"),
           fileAttr, /*line=*/275, fileAttr,
           /*baseType=*/nullptr, LLVM::DIFlags::Zero, /*sizeInBits=*/384,
@@ -304,7 +302,6 @@ LLVM::DIDerivedTypeAttr ExecutableLibraryDI::getWorkgroupStateV0T() {
       "iree_hal_executable_workgroup_state_v0_t",
       LLVM::DICompositeTypeAttr::get(
           builder.getContext(), llvm::dwarf::DW_TAG_structure_type,
-          /*recId=*/{},
           builder.getStringAttr("iree_hal_executable_workgroup_state_v0_t"),
           fileAttr, /*line=*/321, fileAttr,
           /*baseType=*/nullptr, LLVM::DIFlags::Zero, /*sizeInBits=*/256,
@@ -540,13 +537,13 @@ HALDispatchABI::buildScopeAttr(mlir::ModuleOp moduleOp,
   if (!llvmFuncOp.isExternal()) {
     id = DistinctAttr::create(UnitAttr::get(context));
   }
-  return LLVM::DISubprogramAttr::get(context, id, compileUnitAttr, fileAttr,
-                                     funcNameAttr, funcNameAttr, fileAttr,
-                                     /*line=*/1,
-                                     /*scopeline=*/1,
-                                     LLVM::DISubprogramFlags::Definition |
-                                         LLVM::DISubprogramFlags::Optimized,
-                                     subroutineTypeAttr, /*retainedNodes =*/{});
+  return LLVM::DISubprogramAttr::get(
+      context, id, compileUnitAttr, fileAttr, funcNameAttr, funcNameAttr,
+      fileAttr,
+      /*line=*/1,
+      /*scopeline=*/1,
+      LLVM::DISubprogramFlags::Definition | LLVM::DISubprogramFlags::Optimized,
+      subroutineTypeAttr, /*retainedNodes =*/{}, /*annotations =*/{});
 }
 
 // Returns the most local DISubprogramAttr starting from |forOp|.
@@ -1123,15 +1120,18 @@ Value HALDispatchABI::callImport(Operation *forOp, StringRef importName,
 
   Value nullPtrValue = builder.create<LLVM::ZeroOp>(
       loc, LLVM::LLVMPointerType::get(builder.getContext()));
+  SmallVector<Value> args = {
+      /*thunk_func_ptr=*/thunkPtrValue,
+      /*import_func_ptr=*/importFunc.first,
+      /*params=*/params,
+      /*context=*/importFunc.second,
+      /*reserved=*/nullPtrValue,
+  };
   auto callOp =
-      builder.create<LLVM::CallOp>(loc, TypeRange{builder.getI32Type()},
-                                   ValueRange{
-                                       /*thunk_func_ptr=*/thunkPtrValue,
-                                       /*import_func_ptr=*/importFunc.first,
-                                       /*params=*/params,
-                                       /*context=*/importFunc.second,
-                                       /*reserved=*/nullPtrValue,
-                                   });
+      builder.create<LLVM::CallOp>(loc, TypeRange{builder.getI32Type()}, args);
+  callOp.getProperties().operandSegmentSizes = {
+      static_cast<int32_t>(args.size()), 0};
+  callOp.getProperties().op_bundle_sizes = builder.getDenseI32ArrayAttr({});
   return callOp.getResult();
 }
 
@@ -1299,6 +1299,9 @@ FailureOr<SmallVector<Value>> HALDispatchABI::materializeABI(
   if (cConv == IREE::HAL::CallingConvention::Default) {
     auto callOp = rewriter.create<LLVM::CallOp>(
         loc, abiFunctionType->getReturnTypes(), allArgsList, forOp->getAttrs());
+    callOp.getProperties().operandSegmentSizes = {
+        static_cast<int32_t>(allArgsList.size()), 0};
+    callOp.getProperties().op_bundle_sizes = rewriter.getDenseI32ArrayAttr({});
     return llvm::map_to_vector(callOp.getResults(),
                                [](OpResult v) -> Value { return v; });
   }

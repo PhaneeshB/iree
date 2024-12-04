@@ -3,27 +3,14 @@
 #pipeline_layout = #hal.pipeline.layout<bindings = [
   #hal.pipeline.binding<storage_buffer>
 ]>
-hal.executable private @err_multiple_entry_point {
-  // expected-error @+1 {{reconciliation for multiple export ops unsupported}}
-  hal.executable.variant public @reconcile_workgroup_size target(#hal.executable.target<"", "", {}>) {
-    hal.executable.export public @entry_point1 layout(#pipeline_layout)
-    hal.executable.export public @entry_point2 layout(#pipeline_layout)
-  }
-}
-
-// -----
-
-#pipeline_layout = #hal.pipeline.layout<bindings = [
-  #hal.pipeline.binding<storage_buffer>
-]>
 hal.executable private @reconcile_workgroup_size {
   hal.executable.variant public @reconcile_workgroup_size target(#hal.executable.target<"", "", {}>) {
     hal.executable.export public @entry_point layout(#pipeline_layout)
     builtin.module {
-      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<None workgroup_size = [4]>}  {
+      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<pipeline = None workgroup_size = [4]>}  {
         return
       }
-      func.func @fn2() attributes {translation_info = #iree_codegen.translation_info<None workgroup_size = [4]>} {
+      func.func @fn2() attributes {translation_info = #iree_codegen.translation_info<pipeline = None workgroup_size = [4]>} {
         return
       }
     }
@@ -42,7 +29,7 @@ hal.executable private @single_translation_info {
   hal.executable.variant public @single_translation_info target(#hal.executable.target<"", "", {}>) {
     hal.executable.export public @entry_point layout(#pipeline_layout)
     builtin.module {
-      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<None workgroup_size = [4]>}  {
+      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<pipeline = None workgroup_size = [4]>}  {
         return
       }
       func.func @fn2()  {
@@ -65,10 +52,10 @@ hal.executable private @err_mistmatched_workgroup_size {
     // expected-error @+1 {{failed to reconcile workgroup sizes}}
     hal.executable.export public @entry_point layout(#pipeline_layout)
     builtin.module {
-      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<None workgroup_size = [4]>}  {
+      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<pipeline = None workgroup_size = [4]>}  {
         return
       }
-      func.func @fn2() attributes {translation_info = #iree_codegen.translation_info<None workgroup_size = [4, 2]>} {
+      func.func @fn2() attributes {translation_info = #iree_codegen.translation_info<pipeline = None workgroup_size = [4, 2]>} {
         return
       }
     }
@@ -85,10 +72,10 @@ hal.executable private @err_mistmatched_workgroup_size2 {
     // expected-error @+1 {{failed to reconcile workgroup sizes}}
     hal.executable.export public @entry_point layout(#pipeline_layout)
     builtin.module {
-      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<None workgroup_size = [4]>}  {
+      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<pipeline = None workgroup_size = [4]>}  {
         return
       }
-      func.func @fn2() attributes {translation_info = #iree_codegen.translation_info<None>} {
+      func.func @fn2() attributes {translation_info = #iree_codegen.translation_info<pipeline = None>} {
         return
       }
     }
@@ -104,10 +91,10 @@ hal.executable private @reconcile_subgroup_size {
   hal.executable.variant public @reconcile_subgroup_size target(#hal.executable.target<"", "", {}>) {
     hal.executable.export public @entry_point layout(#pipeline_layout)
     builtin.module {
-      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<None subgroup_size = 32>}  {
+      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<pipeline = None subgroup_size = 32>}  {
         return
       }
-      func.func @fn2() attributes {translation_info = #iree_codegen.translation_info<None subgroup_size = 32>} {
+      func.func @fn2() attributes {translation_info = #iree_codegen.translation_info<pipeline = None subgroup_size = 32>} {
         return
       }
     }
@@ -126,10 +113,10 @@ hal.executable private @err_reconcile_subgroup_size {
   hal.executable.variant public @err_reconcile_subgroup_size target(#hal.executable.target<"", "", {}>) {
     hal.executable.export public @entry_point layout(#pipeline_layout)
     builtin.module {
-      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<None subgroup_size = 32>}  {
+      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<pipeline = None subgroup_size = 32>}  {
         return
       }
-      func.func @fn2() attributes {translation_info = #iree_codegen.translation_info<None subgroup_size = 32>} {
+      func.func @fn2() attributes {translation_info = #iree_codegen.translation_info<pipeline = None subgroup_size = 32>} {
         return
       }
     }
@@ -148,10 +135,10 @@ hal.executable private @llvm_func_attrs {
   hal.executable.variant public @llvm_func_attrs target(#hal.executable.target<"", "", {}>) {
     hal.executable.export public @entry_point layout(#pipeline_layout)
     builtin.module {
-      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<None, {llvm_func_attrs = {"amdgpu-waves-per-eu" = "2"}}>}  {
+      func.func @fn1() attributes {translation_info = #iree_codegen.translation_info<pipeline = None, {llvm_func_attrs = {"amdgpu-waves-per-eu" = "2"}}>}  {
         return
       }
-      func.func @fn2() attributes {translation_info = #iree_codegen.translation_info<None, {llvm_func_attrs = {"amdgpu-waves-per-eu" = "4"}}>} {
+      func.func @fn2() attributes {translation_info = #iree_codegen.translation_info<pipeline = None, {llvm_func_attrs = {"amdgpu-waves-per-eu" = "4"}}>} {
         return
       }
     }
@@ -191,6 +178,8 @@ hal.executable private @scf_forall_2D {
 }
 //  CHECK-DAG: #[[MAP0:.+]] = affine_map<()[s0] -> (s0 ceildiv 64)
 //  CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0] -> (s0 ceildiv 32)
+//  CHECK-DAG: #[[MAP2:.+]] = affine_map<()[s0] -> (s0 * 64)>
+//  CHECK-DAG: #[[MAP3:.+]] = affine_map<()[s0] -> (s0 * 32)>
 //      CHECK: hal.executable.export public @scf_forall_2D layout
 // CHECK-NEXT:     %[[ARG1:[a-zA-z0-9]+]]: index
 // CHECK-SAME:     %[[ARG2:[a-zA-z0-9]+]]: index
@@ -203,7 +192,9 @@ hal.executable private @scf_forall_2D {
 //  CHECK-DAG:   %[[WG_ID_Y:.+]] = hal.interface.workgroup.id[1]
 //  CHECK-DAG:   %[[WG_ID_X:.+]] = hal.interface.workgroup.id[0]
 //  CHECK-NOT:   scf.forall
-//      CHECK:   "use"(%[[WG_ID_Y]], %[[WG_ID_X]])
+//      CHECK:   %[[I:.+]] = affine.apply #[[MAP2]]()[%[[WG_ID_Y]]]
+//      CHECK:   %[[J:.+]] = affine.apply #[[MAP3]]()[%[[WG_ID_X]]]
+//      CHECK:   "use"(%[[I]], %[[J]])
 
 // -----
 
@@ -236,6 +227,7 @@ hal.executable private @scf_forall_2D_dynamic_tile_size {
   }
 }
 //  CHECK-DAG: #[[MAP0:.+]] = affine_map<()[s0, s1] -> (s0 ceildiv s1)
+//  CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0, s1] -> (s1 * s0)>
 //      CHECK: hal.executable.export public @scf_forall_2D_dynamic_tile_size layout
 // CHECK-NEXT:     %[[ARG1:[a-zA-z0-9]+]]: index
 // CHECK-SAME:     %[[ARG2:[a-zA-z0-9]+]]: index
@@ -246,10 +238,14 @@ hal.executable private @scf_forall_2D_dynamic_tile_size {
 //  CHECK-DAG:   %[[C1:.+]] = arith.constant 1 : index
 //      CHECK:   hal.return %[[WG_X]], %[[WG_Y]], %[[C1]]
 //      CHECK: func @scf_forall_2D_dynamic_tile_size()
+//  CHECK-DAG:   %[[STEP_Y:.+]] = hal.interface.constant.load {{.+}} ordinal(2)
+//  CHECK-DAG:   %[[STEP_X:.+]] = hal.interface.constant.load {{.+}} ordinal(3)
 //  CHECK-DAG:   %[[WG_ID_Y:.+]] = hal.interface.workgroup.id[1]
 //  CHECK-DAG:   %[[WG_ID_X:.+]] = hal.interface.workgroup.id[0]
 //  CHECK-NOT:   scf.forall
-//      CHECK:   "use"(%[[WG_ID_Y]], %[[WG_ID_X]])
+//      CHECK:   %[[I:.+]] = affine.apply #[[MAP1]]()[%[[WG_ID_Y]], %[[STEP_Y]]]
+//      CHECK:   %[[J:.+]] = affine.apply #[[MAP1]]()[%[[WG_ID_X]], %[[STEP_X]]]
+//      CHECK:   "use"(%[[I]], %[[J]])
 
 // -----
 
@@ -305,6 +301,7 @@ hal.executable private @scf_forall_4D {
 }
 //  CHECK-DAG: #[[MAP0:.+]] = affine_map<()[s0, s1, s2] -> ((-s0 + s1) ceildiv s2)>
 //  CHECK-DAG: #[[MAP1:.+]] = affine_map<()[s0, s1, s2, s3, s4, s5] -> (((-s0 + s1) ceildiv s2) * ((-s3 + s4) ceildiv s5))>
+//  CHECK-DAG: #[[MAP2:.+]] = affine_map<()[s0, s1] -> (s1 * s0)>
 //      CHECK: hal.executable.export public @scf_forall_4D layout
 // CHECK-NEXT:     %[[ARG1:[a-zA-z0-9]+]]: index
 // CHECK-SAME:     %[[ARG2:[a-zA-z0-9]+]]: index
@@ -329,6 +326,8 @@ hal.executable private @scf_forall_4D {
 //  CHECK-DAG:   %[[UB1:.+]] = hal.interface.constant.load layout(#{{.+}}) ordinal(5)
 //  CHECK-DAG:   %[[STEP0:.+]] = hal.interface.constant.load layout(#{{.+}}) ordinal(8)
 //  CHECK-DAG:   %[[STEP1:.+]] = hal.interface.constant.load layout(#{{.+}}) ordinal(9)
+//  CHECK-DAG:   %[[STEP2:.+]] = hal.interface.constant.load layout(#{{.+}}) ordinal(10)
+//  CHECK-DAG:   %[[STEP3:.+]] = hal.interface.constant.load layout(#{{.+}}) ordinal(11)
 //  CHECK-DAG:   %[[WG_ID_X:.+]] = hal.interface.workgroup.id[0]
 //  CHECK-DAG:   %[[WG_ID_Y:.+]] = hal.interface.workgroup.id[1]
 //  CHECK-DAG:   %[[NITERS1:.+]] = affine.apply #[[MAP0]]()[%[[LB1]], %[[UB1]], %[[STEP1]]]
@@ -336,7 +335,11 @@ hal.executable private @scf_forall_4D {
 //  CHECK-DAG:   %[[WG_ID_Z:.+]] = hal.interface.workgroup.id[2]
 //  CHECK-NOT:   scf.forall
 //      CHECK:   %[[DELINEARIZE:.+]]:2 = affine.delinearize_index %[[WG_ID_Z]] into (%[[NITERS0]], %[[NITERS1]])
-//      CHECK:   "use"(%[[DELINEARIZE]]#0, %[[DELINEARIZE]]#1, %[[WG_ID_Y]], %[[WG_ID_X]])
+//      CHECK:   %[[I:.+]] = affine.apply #[[MAP2]]()[%[[DELINEARIZE]]#0, %[[STEP0]]]
+//      CHECK:   %[[J:.+]] = affine.apply #[[MAP2]]()[%[[DELINEARIZE]]#1, %[[STEP1]]]
+//      CHECK:   %[[K:.+]] = affine.apply #[[MAP2]]()[%[[WG_ID_Y]], %[[STEP2]]]
+//      CHECK:   %[[L:.+]] = affine.apply #[[MAP2]]()[%[[WG_ID_X]], %[[STEP3]]]
+//      CHECK:   "use"(%[[I]], %[[J]], %[[K]], %[[L]])
 
 // -----
 
@@ -364,21 +367,26 @@ hal.executable private @scf_forall_4D_static_interchange {
     }
   }
 }
+//  CHECK-DAG:  #[[MAP0:.+]] = affine_map<()[s0] -> (s0 * 2)>
+//  CHECK-DAG:  #[[MAP1:.+]] = affine_map<()[s0] -> (s0 * 3)>
+//  CHECK-DAG:  #[[MAP2:.+]] = affine_map<()[s0] -> (s0 * 4)>
+//  CHECK-DAG:  #[[MAP3:.+]] = affine_map<()[s0] -> (s0 * 5)>
 //      CHECK: hal.executable.export public @scf_forall_4D_static_interchange layout
 //  CHECK-DAG:   %[[C6:.+]] = arith.constant 6 : index
 //  CHECK-DAG:   %[[C7:.+]] = arith.constant 7 : index
 //  CHECK-DAG:   %[[C160:.+]] = arith.constant 160 : index
 //      CHECK:   hal.return %[[C6]], %[[C7]], %[[C160]]
 //      CHECK: func @scf_forall_4D_static_interchange()
-//  CHECK-DAG:   %[[C4:.+]] = arith.constant 4 : index
-//  CHECK-DAG:   %[[C8:.+]] = arith.constant 8 : index
-//  CHECK-DAG:   %[[C5:.+]] = arith.constant 5 : index
 //  CHECK-DAG:   %[[WG_ID_X:.+]] = hal.interface.workgroup.id[0]
 //  CHECK-DAG:   %[[WG_ID_Y:.+]] = hal.interface.workgroup.id[1]
 //  CHECK-DAG:   %[[WG_ID_Z:.+]] = hal.interface.workgroup.id[2]
 //  CHECK-NOT:   scf.forall
-//      CHECK:   %[[DELINEARIZE:.+]]:3 = affine.delinearize_index %[[WG_ID_Z]] into (%[[C5]], %[[C8]], %[[C4]])
-//      CHECK:   "use"(%[[DELINEARIZE]]#2, %[[DELINEARIZE]]#0, %[[WG_ID_X]], %[[WG_ID_Y]], %[[DELINEARIZE]]#1)
+//      CHECK:   %[[DELINEARIZE:.+]]:3 = affine.delinearize_index %[[WG_ID_Z]] into (5, 8, 4)
+//      CHECK:   %[[I:.+]] = affine.apply #[[MAP0]]()[%[[DELINEARIZE]]#0]
+//      CHECK:   %[[J:.+]] = affine.apply #[[MAP1]]()[%[[WG_ID_X]]]
+//      CHECK:   %[[K:.+]] = affine.apply #[[MAP2]]()[%[[WG_ID_Y]]]
+//      CHECK:   %[[L:.+]] = affine.apply #[[MAP3]]()[%[[DELINEARIZE]]#1]
+//      CHECK:   "use"(%[[DELINEARIZE]]#2, %[[I]], %[[J]], %[[K]], %[[L]])
 
 // -----
 

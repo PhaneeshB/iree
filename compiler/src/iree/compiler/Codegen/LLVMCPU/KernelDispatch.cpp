@@ -11,13 +11,13 @@
 #include "iree/compiler/Codegen/Interfaces/PartitionableLoopsInterface.h"
 #include "iree/compiler/Codegen/LLVMCPU/TargetMLTransformInfo.h"
 #include "iree/compiler/Codegen/LLVMCPU/Utils.h"
-#include "iree/compiler/Codegen/TransformStrategies/CPU/Common.h"
 #include "iree/compiler/Codegen/Utils/CPUUtils.h"
 #include "iree/compiler/Codegen/Utils/LinalgOpInfo.h"
 #include "iree/compiler/Codegen/Utils/Utils.h"
 #include "iree/compiler/Dialect/HAL/IR/HALTypes.h"
 #include "iree/compiler/Dialect/LinalgExt/IR/LinalgExtOps.h"
 #include "iree/compiler/Dialect/LinalgExt/Utils/IndexingUtils.h"
+#include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
@@ -30,6 +30,7 @@
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -99,10 +100,13 @@ static llvm::cl::opt<bool> clDisableArmSMETiling(
                    "target (i.e., when the +sme feature flag is present)"),
     llvm::cl::init(false));
 
-// Non-static options are used in other places.
-llvm::cl::opt<bool> clEnableTransformDialectJit(
-    "iree-llvmcpu-enable-transform-dialect-jit",
-    llvm::cl::desc("enable the usage of the transform dialect JIT"),
+static llvm::cl::opt<bool> clEnableRiscvAggressiveDist(
+    "iree-llvmcpu-riscv-aggressive-distribution",
+    llvm::cl::desc(
+        "Enable aggressive method for distribution tile size. "
+        "It is only applied for linalg contraction ops now. "
+        "If distConfig.minTileSizes[i] >= distConfig.maxTileSizes[i], "
+        "set distConfig.maxTileSizes[i] to 2 * distConfig.minTileSizes[i]."),
     llvm::cl::init(false));
 
 using IREE::Codegen::DispatchLoweringPassPipeline;
@@ -272,12 +276,20 @@ getVectorPreProcStrategy(linalg::LinalgOp linalgOp) {
   return VectorPreProcStrategy::None;
 }
 
-DictionaryAttr getPipelineConfWithPeelingAttr(MLIRContext *context) {
+static DictionaryAttr getPipelineConfWithPeelingAttr(MLIRContext *context) {
   auto enableLoopPeelingAttrName = getEnableLoopPeelingAttrName(context);
   auto unitAttr = UnitAttr::get(context);
 
   return DictionaryAttr::get(
       context, ArrayRef<NamedAttribute>({enableLoopPeelingAttrName, unitAttr}));
+}
+
+static DictionaryAttr
+getPipelineConfWithDecompositionAttr(MLIRContext *context) {
+  auto attrName = getEnableDecompositionAttrName(context);
+  auto unitAttr = UnitAttr::get(context);
+  return DictionaryAttr::get(context,
+                             ArrayRef<NamedAttribute>({attrName, unitAttr}));
 }
 
 /// Looks for the `native_vector_size` attribute in the hal.executable.target
@@ -790,11 +802,8 @@ static int getRegisterSpaceBitsIfKnown(IREE::HAL::ExecutableTargetAttr target) {
       return 16 * 128;
     }
   } else if (isAArch64(target)) {
-    // Can't determine register space size at compile time on SVE.
-    if (hasFeature(target, "+sve") || hasFeature(target, "+sve2")) {
-      return 0;
-    }
-    // 32 NEON registers (128-bit each).
+    // 32 NEON/SVE registers (at least 128-bit each, returns the base size for
+    // SVE).
     return 32 * 128;
   } else {
     // Don't know register space size as a compile-time constant on other
@@ -1290,6 +1299,62 @@ static void getMatmulVectorSizesUsingFullVectorHeuristics(
   sizes[1] = std::max<int64_t>(sizes[1], minNumElements);
 }
 
+/// Utility to compute the tile sizes for RISC-V Vector.
+/// For now, it only supports nonWideningLinalgElementType float.
+/// TileSize is set to m = 7, n = maxNumberElementsForLMUL4, and k = 1.
+///
+/// Example: for an pure f32-matmul and a 512-bit vector register.
+/// nativeVectorSize is equal to VLEN * LMUL2 / 8, so it's 128.
+/// maxNumberElementsForLMUL4 = 128 * 2 * 8 / 32 = 64.
+///
+/// TODO: Currently it only supports for nonWideningLinalgElementType.
+static void
+getMatmulRISCVVectorSizes(mlir::FunctionOpInterface entryPointFn,
+                          linalg::LinalgOp op, int64_t vectorSize,
+                          SmallVectorImpl<int64_t> &sizes,
+                          SmallVectorImpl<bool> &scalableSizeFlags) {
+  if (sizes.empty())
+    getDefaultMatmulVectorSizes(op, vectorSize, sizes, scalableSizeFlags);
+  // TODO: support widening matmul.
+  // Determines n dimension tile size with VLEN for
+  // nonWideningLinalgElementType.
+  FailureOr<Type> elementType = nonWideningLinalgElementType(op);
+  if (failed(elementType))
+    return;
+
+  // nativeVectorSize is cacluated with VLEN and LMUL=2.
+  int64_t nativeVectorSize = getNativeVectorSizeInBytes(entryPointFn);
+  int64_t elementSize;
+  if (elementType->isF16()) {
+    elementSize = 16;
+  } else if (elementType->isF32()) {
+    elementSize = 32;
+  } else if (elementType->isF64()) {
+    elementSize = 64;
+  } else {
+    // TODO: support int data type
+    return;
+  }
+  FailureOr<linalg::ContractionDimensions> cDims =
+      linalg::inferContractionDims(op);
+  if (failed(cDims) || cDims->m.size() != 1)
+    return;
+  // Use 7 x lmul4 to fully utilize vector registers.
+  sizes[0] = 7;
+  // Calculate tile size for the main vector dimension (N).
+  constexpr int64_t kByteSizeInBits = 8;
+  int64_t maxNumberElementsForLMUL4 =
+      (nativeVectorSize * 2 * kByteSizeInBits) / elementSize;
+  sizes[1] = maxNumberElementsForLMUL4;
+  sizes[2] = 1;
+  ArrayRef<int64_t> lhsShape = op.getShape(op.getDpsInputOperand(0));
+  // If m = 1, set tile size to 1 x lmul8
+  if (lhsShape[cDims->m[0]] == 1) {
+    sizes[0] = 1;
+    sizes[1] *= 2;
+  }
+}
+
 /// Utility to compute the tile sizes for AArch64 SME. Unlike other targets, the
 /// tile sizes picked here must exactly match multiples of the SME hardware
 /// virtual tiles, as there is currently no support for lowering non-standard
@@ -1352,6 +1417,16 @@ getMatmulVectorSizes(mlir::FunctionOpInterface entryPointFn,
     if (matmulTileSizes.empty()) {
       getMatmulVectorSizesUsingFullVectorHeuristics(
           entryPointFn, op, vectorSize, matmulTileSizes, matmulScalableFlags);
+    }
+  }
+
+  if (isRISCV(targetAttr) && hasAnyVFeature(targetAttr)) {
+    // Use default tile size for matmul_transpose_b &
+    // batch_matmul_transpose_b to avoid performance drop.
+    if (!isa<linalg::MatmulTransposeBOp, linalg::BatchMatmulTransposeBOp>(op)) {
+      // Try to maximize the vector register utilization rate for matmul.
+      getMatmulRISCVVectorSizes(entryPointFn, op, vectorSize, matmulTileSizes,
+                                matmulScalableFlags);
     }
   }
 
@@ -1494,6 +1569,25 @@ setRootConfig(mlir::FunctionOpInterface entryPointFn,
        llvm::zip_equal(cacheTileSizes, vecTileSizes)) {
     int64_t minTileSize = cacheTileSize != 0 ? cacheTileSize : vecTileSize;
     distConfig.minTileSizes.push_back(minTileSize);
+  }
+  // FIXME: Apply maxTileSize modification for all targets.
+  auto targetAttr = IREE::HAL::ExecutableTargetAttr::lookup(entryPointFn);
+  if (isRISCV(targetAttr) && hasAnyVFeature(targetAttr)) {
+    LLVM_DEBUG(KD_DBGS() << "RISC-V Aggressive Distribution: "
+                         << clEnableRiscvAggressiveDist << "\n");
+    for (auto loopNum :
+         llvm::seq<unsigned>(static_cast<unsigned>(isBM), numLoops)) {
+      if (clEnableRiscvAggressiveDist) {
+        if (distConfig.maxTileSizes[loopNum] <=
+            distConfig.minTileSizes[loopNum]) {
+          distConfig.maxTileSizes[loopNum] =
+              2 * distConfig.minTileSizes[loopNum];
+        }
+      } else {
+        distConfig.maxTileSizes[loopNum] = std::max(
+            distConfig.maxTileSizes[loopNum], distConfig.minTileSizes[loopNum]);
+      }
+    }
   }
   SmallVector<int64_t> distTileSizes =
       getDefaultDistributedLevelTileSizes(linalgOp, distConfig);
@@ -1690,11 +1784,23 @@ static LogicalResult setRootConfig(mlir::FunctionOpInterface entryPointFn,
     distTileSizes[pos] = std::max<int64_t>(distTileSizes[pos], 1);
   }
 
+  // Dynamic inner tiles lead to unbounded stack allocation (which is introduced
+  // by tensor.pad op), so we do not decompose the cases. The x86 and risc-v
+  // backends prefer to not decompose the ops.
+  DictionaryAttr pipelineConfig;
+  auto target = IREE::HAL::ExecutableTargetAttr::lookup(entryPointFn);
+  bool hasDynamicInnerTile = llvm::any_of(
+      op.getMixedTiles(), [](OpFoldResult ofr) { return ofr.is<Value>(); });
+  if (!hasDynamicInnerTile && !isX86(target) && !isRISCV(target)) {
+    pipelineConfig = getPipelineConfWithDecompositionAttr(op.getContext());
+  }
+
   SmallVector<int64_t> vecTileSizes = getPackVectorTileSizes(entryPointFn, op);
   TileSizesListType tileSizesList = {distTileSizes, vecTileSizes};
   return setOpConfigAndEntryPointFnTranslation(
       entryPointFn, op, tileSizesList,
-      DispatchLoweringPassPipeline::CPUDataTiling);
+      DispatchLoweringPassPipeline::CPUDataTiling, /*workgroupSize=*/{},
+      /*subgroupSize=*/{}, pipelineConfig);
 }
 
 static LogicalResult setRootConfig(mlir::FunctionOpInterface entryPointFn,
@@ -1718,16 +1824,30 @@ static LogicalResult setRootConfig(mlir::FunctionOpInterface entryPointFn,
     tileSizes[pos] = ShapedType::isDynamic(size) ? 1 : size;
   }
 
+  // Dynamic inner tiles lead to unbounded stack allocation (which is introduced
+  // by tensor.pad op), so we do not decompose the cases. The x86 and risc-v
+  // backends prefer to not decompose the ops.
+  DictionaryAttr pipelineConfig;
+  auto target = IREE::HAL::ExecutableTargetAttr::lookup(entryPointFn);
+  bool hasDynamicInnerTile = llvm::any_of(
+      op.getMixedTiles(), [](OpFoldResult ofr) { return ofr.is<Value>(); });
+  if (!hasDynamicInnerTile && !isX86(target) && !isRISCV(target)) {
+    pipelineConfig = getPipelineConfWithDecompositionAttr(op.getContext());
+  }
+
   TileSizesListType tileSizesList = {distTileSizes, tileSizes};
   return setOpConfigAndEntryPointFnTranslation(
       entryPointFn, op, tileSizesList,
-      DispatchLoweringPassPipeline::CPUDataTiling);
+      DispatchLoweringPassPipeline::CPUDataTiling, /*workgroupSize=*/{},
+      /*subgroupSize=*/{}, pipelineConfig);
 }
 
 static LogicalResult setRootConfig(mlir::FunctionOpInterface entryPointFn,
                                    IREE::LinalgExt::AttentionOp attnOp) {
   FailureOr<IREE::LinalgExt::AttentionOpDetail> maybeOpInfo =
-      IREE::LinalgExt::AttentionOpDetail::get(attnOp.getIndexingMapsArray());
+      IREE::LinalgExt::AttentionOpDetail::get(
+          attnOp.getQueryMap(), attnOp.getKeyMap(), attnOp.getValueMap(),
+          attnOp.getOutputMap());
   assert(succeeded(maybeOpInfo) && "failed to infer attention dims");
   auto opInfo = maybeOpInfo.value();
 
@@ -1755,7 +1875,8 @@ static LogicalResult setRootConfig(mlir::FunctionOpInterface entryPointFn,
 
   // Batch, M and N (parallel dimensions) are distributed on workgroups.
   DistributionHeuristicConfig config;
-  int64_t vectorSize = getVectorSize(entryPointFn, attnOp.getOutputType());
+  int64_t vectorSize =
+      getVectorSize(entryPointFn, attnOp.getOutput().getType());
   config.maxTileSizes.resize(opInfo.getDomainRank(), clDefaultDistTileSize);
   config.vectorSizeHints.resize(opInfo.getDomainRank(), vectorSize);
   // Distribute batch dimensions completely on workgroups (tile_size = 1).
@@ -1971,28 +2092,6 @@ setDefaultGenericOpRootConfig(mlir::FunctionOpInterface entryPointFn,
   return setOpConfigAndEntryPointFnTranslation(
       entryPointFn, genericOp, tileSizes, passPipeline, /*workgroupSize=*/{},
       /*subgroupSize=*/{}, pipelineConfig);
-}
-
-/// Set lowering info to be used by the transform dialect jitter.
-static LogicalResult
-setTransformStrategyRootConfig(mlir::FunctionOpInterface entryPointFn,
-                               linalg::GenericOp genericOp,
-                               const LinalgOpInfo &linalgOpInfo,
-                               const TargetMLTransformInfo &targetMLTransInfo) {
-  assert(!getLoweringConfig(genericOp) &&
-         "expected lowering_config is not set");
-  if (!clEnableTransformDialectJit)
-    return failure();
-  cpu::CPUModel cpuModel;
-  if (failed(
-          cpu::matchAndSetReductionStrategy(entryPointFn, genericOp, cpuModel)))
-    return failure();
-  auto translationInfo = IREE::Codegen::TranslationInfoAttr::get(
-      entryPointFn->getContext(),
-      IREE::Codegen::DispatchLoweringPassPipeline::TransformDialectCodegen);
-  if (failed(setTranslationInfo(entryPointFn, translationInfo)))
-    return failure();
-  return success();
 }
 
 /// Utility to return the transpose vector `sizes` for X86. Empty `sizes` on
@@ -2250,11 +2349,6 @@ setRootConfig(mlir::FunctionOpInterface entryPointFn,
               const TargetMLTransformInfo &targetMLTransInfo) {
   assert(!getLoweringConfig(genericOp) &&
          "expected lowering_config is not set");
-  // First, try to apply the transform dialect strategy, if defined.
-  if (succeeded(setTransformStrategyRootConfig(
-          entryPointFn, genericOp, linalgOpInfo, targetMLTransInfo))) {
-    return success();
-  }
 
   if (succeeded(setTransposeLikeOpRootConfig(
           entryPointFn, genericOp, linalgOpInfo, targetMLTransInfo))) {
@@ -2509,6 +2603,14 @@ static LogicalResult setRootConfig(mlir::FunctionOpInterface entryPointFn,
   SmallVector<int64_t> distTileSizes =
       getDefaultDistributedLevelTileSizes(op, DistributionHeuristicConfig{});
   TileSizesListType tileSizes = {distTileSizes};
+  SmallVector<int64_t> vecTileSizes = distTileSizes;
+
+  // Add an extra level of tiling.
+  // TODO: Limit vector tile sizes for other TilingInterface ops.
+  if (auto linalgOp = dyn_cast<linalg::LinalgOp>(*op)) {
+    limitVectorTileSizes(linalgOp, vecTileSizes);
+  }
+  tileSizes.push_back(vecTileSizes);
   return setOpConfigAndEntryPointFnTranslation(
       entryPointFn, op, tileSizes, DispatchLoweringPassPipeline::CPUDefault);
 }
@@ -2522,6 +2624,10 @@ setRootConfigImpl(mlir::FunctionOpInterface entryPointFn, Operation *op,
         .Case<linalg::GenericOp>([&](auto op) {
           return setRootConfig(entryPointFn, op, LinalgOpInfo(op),
                                targetMLTransInfo);
+        })
+        .Case<IREE::LinalgExt::CustomOp>([&](auto op) {
+          return setDefaultCustomOpLoweringConfig(entryPointFn, op,
+                                                  initCPULaunchConfig);
         })
         .Case<IREE::LinalgExt::AttentionOp, IREE::LinalgExt::FftOp,
               tensor::PackOp, tensor::PadOp, tensor::UnPackOp, linalg::Mmt4DOp,
@@ -2670,7 +2776,7 @@ adjustTileSizesForUnPackOp(mlir::FunctionOpInterface entryPointFn,
   auto tInfo = getTranslationInfo(entryPointFn);
   auto pipeline = tInfo.getPassPipeline().getValue();
   auto pipelineConfig = tInfo.getConfiguration();
-  if (isLoopPeelingEnabled(entryPointFn)) {
+  if (isOptEnabled(entryPointFn, getEnableLoopPeelingStr())) {
     // See #16406
     LLVM_DEBUG(KD_DBGS() << "unpack fusion does not work with peeling, falling "
                             "back to non-peeling path");
@@ -2679,10 +2785,10 @@ adjustTileSizesForUnPackOp(mlir::FunctionOpInterface entryPointFn,
     // Remove the "enable_loop_peeling" attr from pipelineConfig
     auto enableLoopPeelingAttrName =
         getEnableLoopPeelingAttrName(rootOp->getContext());
-    auto newPipelineConfigEntries = llvm::to_vector(llvm::make_filter_range(
+    auto newPipelineConfigEntries = llvm::filter_to_vector(
         pipelineConfig.getValue(), [&](NamedAttribute entry) {
           return entry.getName() != enableLoopPeelingAttrName;
-        }));
+        });
 
     pipelineConfig =
         DictionaryAttr::get(rootOp->getContext(), newPipelineConfigEntries);
@@ -2904,6 +3010,30 @@ setLoweringConfigForComputeOps(mlir::FunctionOpInterface entryPointFn,
     }
   }
 
+  // Make sure the innermost tile size times element size is multiple
+  // of byte bits. This is required for now because we do not fully
+  // support sub-byte vector stores. Once vector stores are supported
+  // then this can be eliminated. Note that emulating sub-byte sized vector
+  // loads and stores will have a performance impact.
+  auto resultTypes = rootOperation->getResultTypes();
+  if (commonVecTileSizes.size() != 0 && !resultTypes.empty()) {
+    Type elementType = cast<ShapedType>(resultTypes[0]).getElementType();
+    unsigned int elementTypeSize;
+    if (auto complexType = llvm::dyn_cast<ComplexType>(elementType)) {
+      elementTypeSize =
+          2 * complexType.getElementType().getIntOrFloatBitWidth();
+    } else {
+      elementTypeSize = elementType.getIntOrFloatBitWidth();
+    }
+    // for now just enable for i1
+    if (elementTypeSize == 1) {
+      auto innermostTileSize = commonVecTileSizes.back();
+      commonVecTileSizes.back() =
+          llvm::alignTo(innermostTileSize * elementTypeSize, 8) /
+          elementTypeSize;
+    }
+  }
+
   // Set the lowering configs with new tile sizes.
   for (auto op : computeOps) {
     int numLoops = cast<TilingInterface>(op).getLoopIteratorTypes().size();
@@ -3060,8 +3190,16 @@ setTranslationInfoAndRootConfig(mlir::FunctionOpInterface entryPointFn,
       return failure();
     }
 
-    // Set vector level tile sizes for other operations individually.
-    if (failed(setLoweringConfigForComputeOps(entryPointFn, computeOps,
+    // Avoid this for ops within a custom_op since those ops have already their
+    // configuration set.
+    auto prunedComputeOps =
+        llvm::to_vector(llvm::make_filter_range(computeOps, [](Operation *op) {
+          return !isa_and_nonnull<IREE::LinalgExt::CustomOp>(
+                     op->getParentOp()) ||
+                 getLoweringConfig<IREE::Codegen::LoweringConfigAttr>(op) ==
+                     nullptr;
+        }));
+    if (failed(setLoweringConfigForComputeOps(entryPointFn, prunedComputeOps,
                                               rootOperation))) {
       return failure();
     }

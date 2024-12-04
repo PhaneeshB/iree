@@ -610,6 +610,25 @@ class BuildFileFunctions(object):
             f")\n\n"
         )
 
+    def iree_amdgpu_bitcode_library(self, name, gpu_arch, srcs, copts=None, out=None):
+        name_block = self._convert_string_arg_block("NAME", name, quote=False)
+        gpu_arch_block = self._convert_string_arg_block(
+            "GPU_ARCH", gpu_arch, quote=False
+        )
+        srcs_block = self._convert_srcs_block(srcs)
+        out_block = self._convert_string_arg_block("OUT", out, quote=True)
+        copts_block = self._convert_string_list_block("COPTS", copts, sort=False)
+
+        self._converter.body += (
+            f"iree_amdgpu_bitcode_library(\n"
+            f"{name_block}"
+            f"{gpu_arch_block}"
+            f"{srcs_block}"
+            f"{out_block}"
+            f"{copts_block}"
+            f")\n\n"
+        )
+
     def iree_link_bitcode(self, name, bitcode_files):
         name_block = self._convert_string_arg_block("NAME", name, quote=False)
         bitcode_files_block = self._convert_srcs_block(
@@ -769,7 +788,6 @@ class BuildFileFunctions(object):
         target_backends_and_drivers=None,
         runner_args=None,
         tags=None,
-        target_cpu_features=None,
         timeout=None,
         **kwargs,
     ):
@@ -787,9 +805,6 @@ class BuildFileFunctions(object):
         input_type_block = self._convert_string_arg_block("INPUT_TYPE", input_type)
         runner_args_block = self._convert_string_list_block("RUNNER_ARGS", runner_args)
         labels_block = self._convert_string_list_block("LABELS", tags)
-        target_cpu_features_block = self._convert_string_arg_block(
-            "TARGET_CPU_FEATURES", target_cpu_features
-        )
         timeout_block = self._convert_timeout_arg_block("TIMEOUT", timeout)
 
         self._converter.body += (
@@ -802,7 +817,6 @@ class BuildFileFunctions(object):
             f"{input_type_block}"
             f"{runner_args_block}"
             f"{labels_block}"
-            f"{target_cpu_features_block}"
             f"{timeout_block}"
             f")\n\n"
         )

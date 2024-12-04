@@ -13,34 +13,6 @@ include "mlir/Pass/PassBase.td"
 // LLVMGPU Passes (keep alphabetical)
 //------------------------------------------------------------------------------
 
-def AMDGPUPrepareForChainedMatmulPass :
-    InterfacePass<"iree-amdgpu-prepare-chained-matmul", "mlir::FunctionOpInterface"> {
-  let summary = "Pass to swap operands and transpose accumulator and result";
-  let description = [{
-    Given a chain of matmuls with some or no operations
-    in between, like
-
-    d = matmul_transpose_b(a, b) + c
-    ...
-    e = matmul_transpose_b(d, f) + g
-
-    this pattern transforms the above IR to
-
-    c.t = transpose c
-    d = matmul_transpose_b(b, a) + c.t
-    d.t = transpose d
-    ...
-    g.t = transpose g
-    e = matmul_transpose_b(f, d.t) + g.t
-    e.t = transpose e
-
-    On CDNA architectures, where the layouts of the RHS and result
-    are the same and transposed from the LHS layout, this type
-    of transformation can avoid trips to shared memory/shuffle instructions
-    on operators like Flash Attention.
-  }];
-}
-
 // TODO: Bring the argument in line with the names used elsewhere.
 def ConvertToNVVMPass :
     Pass<"iree-convert-to-nvvm", "ModuleOp"> {
@@ -66,6 +38,11 @@ def ExtractAddressComputationGPUPass: Pass<"extract-address-computation-gpu"> {
   ];
 }
 
+def LLVMGPUAssignConstantOrdinalsPass :
+    Pass<"iree-llvmgpu-assign-constant-ordinals", "IREE::HAL::ExecutableVariantOp"> {
+  let summary = "Assigns executable constant ordinals across all LLVMGPU variants.";
+}
+
 def LLVMGPUCastAddressSpaceFunctionPass :
     Pass<"iree-llvmgpu-cast-address-space-function", "ModuleOp"> {
   let summary = "Cast address space to generic in CallOp and FuncOp";
@@ -82,9 +59,16 @@ def LLVMGPUConfigureTensorLayoutsPass :
   let summary = "Pass to set layouts on tensors for later vector distribution";
 }
 
-def LLVMGPUConfigureVectorLayoutsPass :
-    InterfacePass<"iree-llvmgpu-configure-vector-layouts", "mlir::FunctionOpInterface"> {
-  let summary = "Pass to set layouts for vector distribution";
+def LLVMGPULinkExecutablesPass :
+    Pass<"iree-llvmgpu-link-executables", "mlir::ModuleOp"> {
+  let summary = "Links LLVMGPU HAL executables within the top-level program module.";
+  let options = [
+    Option<
+      "target", "target",
+      "std::string", "",
+      "Target backend name whose executables will be linked by this pass."
+    >,
+  ];
 }
 
 def LLVMGPULowerExecutableTargetPass :
@@ -105,19 +89,6 @@ def LLVMGPUPrefetchSharedMemoryPass :
 def LLVMGPUPromoteMatmulToFitMMAPass :
     InterfacePass<"iree-llvmgpu-promote-matmul-to-fit-mma", "mlir::FunctionOpInterface"> {
   let summary = "Pass to promote contraction ops to fit mma shapes";
-  let options = [
-    Option<"targetDimensions", "target-dimensions", "mlir::iree_compiler::LLVMGPUMatmulPadOption",
-           /*default=*/"mlir::iree_compiler::LLVMGPUMatmulPadOption::ParallelDims",
-           "Select the strategy to control how multi_reduction is lowered.",
-           [{::llvm::cl::values(
-            clEnumValN(mlir::iree_compiler::LLVMGPUMatmulPadOption::ParallelDims,
-                       "parallel",
-                       "Pad all the parallel dims for contraction ops."),
-            clEnumValN(mlir::iree_compiler::LLVMGPUMatmulPadOption::ReductionDims,
-                       "reduction",
-                       "Pad all the reduction dims for contraction ops.")
-        )}]>
-  ];
 }
 
 def LLVMGPUSelectLoweringStrategyPass :
@@ -162,6 +133,11 @@ def LLVMGPUVectorToGPUPass :
 def TestLLVMGPUScalarizeMathOpPass :
     Pass<"iree-test-llvmgpu-legalize-ops", "ModuleOp"> {
   let summary = "Test pass for several legalization patterns.";
+}
+
+def TestLLVMGPUQueryMMAPass :
+    Pass<"iree-test-llvmgpu-query-mma", "ModuleOp"> {
+  let summary = "Test pass for querying the supported mma intrinsic instructions.";
 }
 
 #endif // IREE_CODEGEN_LLVMGPU_PASSES

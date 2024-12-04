@@ -127,9 +127,7 @@ def DispatchLoweringPassPipelineEnum : I32EnumAttr<
 
 // Define the AttrDef
 def DispatchLoweringPassPipelineAttr :
-    EnumAttr<IREECodegen_Dialect, DispatchLoweringPassPipelineEnum, ""> {
-  let assemblyFormat = "``$value";
-}
+    EnumAttr<IREECodegen_Dialect, DispatchLoweringPassPipelineEnum, "">;
 
 //===---------------------------------------------------------------------===//
 // IREE Codegen workgroup mapping attributes
@@ -228,7 +226,7 @@ def IREECodegen_TranslationInfoAttr :
   }];
 
   let assemblyFormat = [{
-    `<` `` $passPipeline
+    `<` `pipeline` `=` `` $passPipeline
     (`codegen_spec` `=` $codegenSpec^)?
     (`workgroup_size` `=` `[` $workgroupSize^ `]`)?
     (`subgroup_size` `=` $subgroupSize^)?
@@ -296,6 +294,7 @@ def IREECodegen_LoweringConfigAttr :
         "getStaticTilingLevelSizes",
         "getTilingLevelSizes",
         "hasTilingLevel",
+        "hasWorkgroupTilingLevel",
       ]>
     ]> {
   let mnemonic = "lowering_config";
@@ -417,6 +416,26 @@ def IREECodegen_ExportConfig : AttrDef<IREECodegen_Dialect, "ExportConfig", []> 
     ArrayAttr getWorkgroupSizeIndexArray();
   }];
   let genVerifyDecl = 1;
+}
+
+//===---------------------------------------------------------------------===//
+// iree_codegen.encoding_layout
+//===---------------------------------------------------------------------===//
+
+def IREECodegen_EncodingNopLayoutAttr  :
+    AttrDef<IREECodegen_Dialect, "EncodingNopLayout", [
+    DeclareAttrInterfaceMethods<IREECodegen_LayoutAttrInterface, [
+        "getEncodingInfo",
+        "lowerOp"
+      ]>
+    ]> {
+  let mnemonic = "encoding_nop_layout";
+  let summary = "An attribute with implementation that treats encoding as nop.";
+  let description = [{
+    An attribute that implements the interface methods that discards the
+    encodings. It can be a default attribute when a backend does not implement
+    encoding details.
+  }];
 }
 
 #endif // IREE_COMPILER_CODEGEN_DIALECT_IREECODEGENATTRS

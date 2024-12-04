@@ -230,7 +230,7 @@ func.func @weight_dequant_matmul() {
   #hal.pipeline.binding<storage_buffer>,
   #hal.pipeline.binding<storage_buffer>
 ]>
-func.func @conv() attributes {translation_info = #iree_codegen.translation_info<LLVMGPUVectorDistribute workgroup_size = [256, 1, 1] subgroup_size = 64, {mma_schedule = #iree_gpu.mma_schedule<intrinsic = #iree_gpu.mma_layout<MFMA_F32_16x16x16_F16>, subgroup_m_count = 1, subgroup_n_count = 4>}>} {
+func.func @conv() attributes {translation_info = #iree_codegen.translation_info<pipeline = LLVMGPUVectorDistribute workgroup_size = [256, 1, 1] subgroup_size = 64, {mma_schedule = #iree_gpu.mma_schedule<intrinsic = #iree_gpu.mma_layout<MFMA_F32_16x16x16_F16>, subgroup_m_count = 1, subgroup_n_count = 4>}>} {
   %cst = arith.constant 0.000000e+00 : f32
   %c0 = arith.constant 0 : index
   %0 = hal.interface.binding.subspan layout(#pipeline_layout) binding(0) alignment(64) offset(%c0) flags(ReadOnly) : !flow.dispatch.tensor<readonly:tensor<2x34x34x1280xf16>>
@@ -257,6 +257,7 @@ func.func @conv() attributes {translation_info = #iree_codegen.translation_info<
 #mapQ = affine_map<(batch, m, k1, k2, n) -> (batch, m, k1)>
 #mapK = affine_map<(batch, m, k1, k2, n) -> (batch, k2, k1)>
 #mapV = affine_map<(batch, m, k1, k2, n) -> (batch, k2, n)>
+#mapS = affine_map<(batch, m, k1, k2, n) -> ()>
 #mapO = affine_map<(batch, m, k1, k2, n) -> (batch, m, n)>
 #mapR = affine_map<(batch, m, k1, k2, n) -> (batch, m)>
 
@@ -272,10 +273,13 @@ func.func @online_attention(%query: tensor<192x1024x64xf16>,
   %scale = arith.constant 1.0 : f16
 
   %out:3 = iree_linalg_ext.online_attention
-        { indexing_maps = [#mapQ, #mapK, #mapV, #mapO, #mapR, #mapR],
+        { indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO, #mapR, #mapR],
           lowering_config = #config }
         ins(%query, %key, %value, %scale : tensor<192x1024x64xf16>, tensor<192x1024x64xf16>, tensor<192x1024x64xf16>, f16)
-        outs(%output, %max, %sum : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>)
+        outs(%output, %max, %sum : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>) {
+          ^bb0(%score : f32):
+            iree_linalg_ext.yield %score : f32
+        }
         -> tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>
 
   return %out#0, %out#2 : tensor<192x1024x64xf32>, tensor<192x1024xf32>
